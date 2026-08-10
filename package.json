@@ -1,0 +1,23 @@
+{
+  "name": "spark-doc-lab",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Local document (PDF/Word) text extraction + inference against a DGX Spark GB10 cluster",
+  "scripts": {
+    "start": "node server/index.js",
+    "dev": "node --watch server/index.js",
+    "doctor": "node scripts/doctor.mjs",
+    "tunnel": "bash scripts/tunnel.sh"
+  },
+  "dependencies": {
+    "dotenv": "^16.4.5",
+    "express": "^4.21.2",
+    "mammoth": "^1.8.0",
+    "multer": "^2.2.0",
+    "pdfjs-dist": "^4.10.38"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

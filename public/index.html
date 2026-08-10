@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Spark Doc Lab</title>
+<link rel="stylesheet" href="/styles.css" />
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><text y='14' font-size='14'>⚡</text></svg>" />
+</head>
+<body>
+  <aside class="sidebar">
+    <div class="brand">⚡ Spark Doc Lab</div>
+
+    <div class="newThread">
+      <label class="lbl" for="docPick">Document</label>
+      <select id="docPick"></select>
+      <input id="file" type="file" accept=".pdf,.docx,.txt,.md,.csv" hidden />
+      <div class="row">
+        <button id="upload" class="small">Upload file…</button>
+        <button id="newThread" class="small primary">New thread</button>
+      </div>
+      <div id="docMeta" class="docMeta"></div>
+    </div>
+
+    <label class="lbl threadsLbl">Threads</label>
+    <div id="threads" class="threads"></div>
+
+    <div id="dbStats" class="dbStats"></div>
+  </aside>
+
+  <main class="main">
+    <header class="topbar">
+      <div class="titleWrap">
+        <span id="threadTitle" class="threadTitle">No thread open</span>
+        <span id="threadDoc" class="threadDoc"></span>
+      </div>
+      <div class="topActions">
+        <select id="model" title="ds4-non-thinking is fastest; ds4-high/max reason first"></select>
+        <span id="threadUsage" class="usage"></span>
+        <button id="traces" class="small">Traces</button>
+        <button id="renameThread" class="small" disabled>Rename</button>
+        <button id="deleteThread" class="small danger" disabled>Delete</button>
+        <span id="status" class="status">checking…</span>
+      </div>
+    </header>
+
+    <div id="transcript" class="transcript">
+      <div class="empty">
+        <h2>Pick a document and start a thread</h2>
+        <p>Upload a PDF or Word file, or choose one you already saved. Every thread
+           keeps its full history — reopen it any time and carry on.</p>
+      </div>
+    </div>
+
+    <div id="stage" class="stage"></div>
+
+    <form id="composer" class="composer">
+      <select id="task" title="Prefix your message with a preset instruction"></select>
+      <textarea id="input" rows="1" placeholder="Ask about the document…  (Enter to send, Shift+Enter for newline)"></textarea>
+      <button id="send" type="submit" class="primary" disabled>Send</button>
+      <button id="stop" type="button" class="hidden">Stop</button>
+    </form>
+  </main>
+
+  <div id="overlay" class="overlay hidden">
+    <div class="sheet">
+      <header class="sheetTop">
+        <strong id="sheetTitle">Traces</strong>
+        <div class="sheetActions">
+          <label class="scopeLbl"><input type="checkbox" id="traceScope" checked /> this thread only</label>
+          <button id="closeSheet" class="small">Close</button>
+        </div>
+      </header>
+      <div id="totals" class="totals"></div>
+      <div id="traceList" class="traceList"></div>
+    </div>
+  </div>
+
+  <script src="/app.js" type="module"></script>
+</body>
+</html>
