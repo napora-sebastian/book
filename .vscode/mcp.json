@@ -1,0 +1,14 @@
+{
+  "servers": {
+    "flow_runner_mcp": {
+      "type": "stdio",
+      "command": "flow-runner-mcp",
+      "args": [],
+      "env": {
+        "AICONNECTOR_BASE_URL": "http://127.0.0.1:8790",
+        "AICONNECTOR_REQUEST_TIMEOUT_SECONDS": "1800",
+        "AICONNECTOR_PROGRESS_INTERVAL_SECONDS": "10"
+      }
+    }
+  }
+}
