@@ -180,6 +180,16 @@ app.delete('/api/documents/:id', (req, res) => {
   res.json({ deleted: db.deleteDocument(Number(req.params.id)) });
 });
 
+app.patch('/api/documents/:id', (req, res) => {
+  const id = Number(req.params.id);
+  if (!db.getDocument(id)) return res.status(404).json({ error: 'No such document.' });
+
+  const filename = req.body?.filename?.trim();
+  if (!filename) return res.status(400).json({ error: 'filename is required.' });
+
+  res.json(withoutText(db.renameDocument(id, filename)));
+});
+
 /* ------------------------------------------------------------------ threads */
 
 app.get('/api/threads', (_req, res) => res.json(db.listThreads()));

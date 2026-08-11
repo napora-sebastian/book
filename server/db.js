@@ -141,6 +141,11 @@ export function deleteDocument(id) {
   return db.prepare('DELETE FROM documents WHERE id = ?').run(id).changes > 0;
 }
 
+export function renameDocument(id, filename) {
+  db.prepare('UPDATE documents SET filename = ? WHERE id = ?').run(filename, id);
+  return getDocument(id);
+}
+
 /* ------------------------------------------------------------------ threads */
 
 export function createThread({ title, documentId, model }) {

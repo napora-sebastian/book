@@ -1,7 +1,7 @@
 const $ = (id) => document.getElementById(id);
 const el = {
   docPick: $('docPick'), file: $('file'), upload: $('upload'), newThread: $('newThread'),
-  docMeta: $('docMeta'), threads: $('threads'), dbStats: $('dbStats'),
+  renameDoc: $('renameDoc'), docMeta: $('docMeta'), threads: $('threads'), dbStats: $('dbStats'),
   threadTitle: $('threadTitle'), threadDoc: $('threadDoc'), model: $('model'),
   renameThread: $('renameThread'), deleteThread: $('deleteThread'), status: $('status'),
   transcript: $('transcript'), stage: $('stage'), composer: $('composer'),
@@ -86,6 +86,7 @@ async function refreshDocuments(selectId) {
 }
 
 function showDocMeta(doc) {
+  el.renameDoc.disabled = !doc;
   el.docMeta.classList.remove('error');
   if (!doc) { el.docMeta.textContent = ''; return; }
   el.docMeta.textContent = [
@@ -119,6 +120,18 @@ el.docPick.addEventListener('change', async () => {
   el.stage.textContent = thread.filename
     ? `${thread.filename} attached — the next turn sends it in full`
     : 'document detached — following turns are plain chat';
+  await refreshThreads();
+});
+
+el.renameDoc.addEventListener('click', async () => {
+  const doc = docCache.find((d) => String(d.id) === el.docPick.value);
+  if (!doc) return;
+
+  const filename = prompt('Document name:', doc.filename);
+  if (!filename?.trim()) return;
+
+  await jsonPost(`/api/documents/${doc.id}`, { filename: filename.trim() }, 'PATCH');
+  await refreshDocuments(doc.id);
   await refreshThreads();
 });
 
