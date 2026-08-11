@@ -325,8 +325,37 @@ function messageActions(wrap, m) {
 
   if (m.role === 'user') {
     acts.appendChild(actBtn('✎ Edit', 'Edit and re-run from here', () => beginEdit(wrap, m)));
+  } else {
+    acts.appendChild(actBtn('⇩ PDF', 'Save this response as a PDF', () => saveMessageAsPdf(m)));
   }
   return acts;
+}
+
+/**
+ * No PDF-generation library is bundled (LAN-only app, no CDN scripts), so this
+ * opens the response alone in a fresh tab and hands off to the browser's own
+ * print dialog — "Save as PDF" there produces the file with zero dependencies.
+ */
+function saveMessageAsPdf(m) {
+  const win = window.open('', '_blank');
+  if (!win) return;
+
+  const title = `${el.threadTitle.textContent} — response`;
+  const meta = [m.model || 'assistant', m.ms ? `${(m.ms / 1000).toFixed(1)}s` : null, m.task && m.task !== 'chat' ? m.task : null]
+    .filter(Boolean).join(' · ');
+
+  win.document.write(`<!doctype html><html><head><meta charset="utf-8"><title>${escapeHtml(title)}</title>
+<style>
+  body { font: 14px/1.6 ui-sans-serif, -apple-system, "SF Pro Text", system-ui, sans-serif; color: #14171c; padding: 32px; max-width: 720px; margin: 0 auto; }
+  .who { color: #6b7280; font-size: 12px; margin-bottom: 12px; }
+  .body { white-space: pre-wrap; word-wrap: break-word; }
+</style></head><body>
+<div class="who">${escapeHtml(meta)}</div>
+<div class="body">${escapeHtml(m.content)}</div>
+</body></html>`);
+  win.document.close();
+  win.focus();
+  win.print();
 }
 
 /** clipboard API is unavailable over plain http on the LAN, hence the fallback. */
