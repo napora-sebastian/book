@@ -260,6 +260,10 @@ app.post('/api/threads/:id/saved-responses', (req, res) => {
   res.json(db.assignSavedResponsesToThread(id, ids));
 });
 
+app.delete('/api/saved-responses/:id', (req, res) => {
+  res.json({ deleted: db.deleteSavedResponse(Number(req.params.id)) });
+});
+
 /* --------------------------------------------------- threaded inference (SSE) */
 
 /**

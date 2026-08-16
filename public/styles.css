@@ -118,6 +118,8 @@ body {
 .acts button.act:hover:not(:disabled) { color: var(--fg); border-color: var(--line); }
 /* Retry is the whole point of a failed turn — never make the user hunt for it. */
 .acts button.act.retry { opacity: 1; color: var(--accent); border-color: var(--line); }
+/* A saved response stays visibly marked, not just hover-revealed like the rest. */
+.acts button.act.saved { opacity: 1; color: var(--accent); border-color: var(--line); }
 /* `.acts button.act` outranks the generic `button.primary`, so restate it. */
 .acts button.act.primary {
   opacity: 1; background: var(--accent); border-color: var(--accent);
