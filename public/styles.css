@@ -120,6 +120,8 @@ body {
 .acts button.act.retry { opacity: 1; color: var(--accent); border-color: var(--line); }
 /* A saved response stays visibly marked, not just hover-revealed like the rest. */
 .acts button.act.saved { opacity: 1; color: var(--accent); border-color: var(--line); }
+/* A completed ground-truth check stays visibly marked, not just hover-revealed. */
+.acts button.act.checked { opacity: 1; color: var(--accent); border-color: var(--line); }
 /* `.acts button.act` outranks the generic `button.primary`, so restate it. */
 .acts button.act.primary {
   opacity: 1; background: var(--accent); border-color: var(--accent);
@@ -279,6 +281,15 @@ button.danger:hover:not(:disabled) { border-color: var(--err); color: var(--err)
   white-space: pre-wrap; word-break: break-word;
 }
 .traceDetail .role { color: var(--accent); }
+
+.diffList { overflow-y: auto; padding: 8px 15px 15px; }
+.diffHunk { margin-bottom: 8px; border-radius: 7px; overflow: hidden; }
+.diffLine {
+  padding: 5px 10px; font: 12.5px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
+  white-space: pre-wrap; word-break: break-word;
+}
+.diffOld { background: color-mix(in srgb, var(--err) 14%, transparent); color: var(--err); }
+.diffNew { background: color-mix(in srgb, var(--accent) 14%, transparent); color: var(--accent); }
 
 .savedFirstLine {
   flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
