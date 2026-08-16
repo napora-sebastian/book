@@ -344,6 +344,7 @@ function messageActions(wrap, m) {
     acts.appendChild(actBtn('✎ Edit', 'Edit and re-run from here', () => beginEdit(wrap, m)));
   } else {
     acts.appendChild(actBtn('⇩ PDF', 'Save this response as a PDF', () => saveMessageAsPdf(m)));
+    acts.appendChild(actBtn('⇩ DOCX', 'Save this response as a Word document', () => downloadMessageAsDocx(m)));
     const save = actBtn('☆ Save', 'Save this response for reuse in other threads', async () => {
       if (save.classList.contains('saved')) return;
       await jsonPost('/api/saved-responses', { messageId: m.id });
@@ -407,6 +408,13 @@ function saveMessageAsPdf(m) {
   win.document.close();
   win.focus();
   win.print();
+}
+
+/** The server builds the actual .docx (no browser-native way to produce one); this just triggers the download. */
+function downloadMessageAsDocx(m) {
+  const a = document.createElement('a');
+  a.href = `/api/messages/${m.id}/docx`;
+  a.click();
 }
 
 /** clipboard API is unavailable over plain http on the LAN, hence the fallback. */
