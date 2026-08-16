@@ -11,6 +11,8 @@ const el = {
   totals: $('totals'), traceList: $('traceList'),
   savedResponses: $('savedResponses'), savedOverlay: $('savedOverlay'), savedList: $('savedList'),
   useSavedResponses: $('useSavedResponses'), closeSavedSheet: $('closeSavedSheet'),
+  groundTruthOverlay: $('groundTruthOverlay'), groundTruthList: $('groundTruthList'),
+  closeGroundTruthSheet: $('closeGroundTruthSheet'),
 };
 
 const fmtTok = (n) => (n == null ? '—' : n.toLocaleString());
@@ -348,6 +350,32 @@ function messageActions(wrap, m) {
       setTimeout(() => { save.textContent = '☆ Save'; }, 1200);
     });
     acts.appendChild(save);
+
+    const gt = actBtn(
+      m.has_ground_truth ? '🔍 Ground truth' : '🔍 Check ground truth',
+      m.has_ground_truth
+        ? 'View how this response compares to the source document'
+        : 'Ask the model to compare this response against the source document',
+      async () => {
+        if (gt.classList.contains('checked')) return openGroundTruth(m.id);
+
+        gt.disabled = true;
+        gt.textContent = '🔍 Checking…';
+        try {
+          await jsonPost(`/api/threads/${currentThreadId}/messages/${m.id}/ground-truth`);
+          gt.textContent = '🔍 Ground truth';
+          gt.classList.add('checked');
+          gt.disabled = false;
+          openGroundTruth(m.id);
+        } catch (err) {
+          gt.textContent = '🔍 Check ground truth';
+          gt.title = err.message;
+          gt.disabled = false;
+        }
+      },
+    );
+    if (m.has_ground_truth) gt.classList.add('checked');
+    acts.appendChild(gt);
   }
   return acts;
 }
@@ -698,6 +726,7 @@ document.addEventListener('keydown', (e) => {
   if (e.key !== 'Escape') return;
   el.overlay.classList.add('hidden');
   el.savedOverlay.classList.add('hidden');
+  el.groundTruthOverlay.classList.add('hidden');
 });
 
 async function openTraces() {
@@ -815,4 +844,25 @@ async function useSavedResponses() {
 
   await jsonPost(`/api/threads/${currentThreadId}/saved-responses`, { savedResponseIds: ids });
   el.savedOverlay.classList.add('hidden');
+}
+
+/* -------------------------------------------------------------- ground truth */
+
+el.closeGroundTruthSheet.addEventListener('click', () => el.groundTruthOverlay.classList.add('hidden'));
+el.groundTruthOverlay.addEventListener('click', (e) => {
+  if (e.target === el.groundTruthOverlay) el.groundTruthOverlay.classList.add('hidden');
+});
+
+async function openGroundTruth(messageId) {
+  el.groundTruthOverlay.classList.remove('hidden');
+  el.groundTruthList.innerHTML = '<div class="d">loading…</div>';
+
+  const check = await api(`/api/messages/${messageId}/ground-truth`);
+  el.groundTruthList.innerHTML = check.diff.length
+    ? check.diff.map((d) => `
+      <div class="diffHunk">
+        ${d.old != null ? `<div class="diffLine diffOld">− ${escapeHtml(d.old)}</div>` : ''}
+        ${d.new != null ? `<div class="diffLine diffNew">+ ${escapeHtml(d.new)}</div>` : ''}
+      </div>`).join('')
+    : '<div class="d">Fully grounded in the document — nothing added or changed.</div>';
 }

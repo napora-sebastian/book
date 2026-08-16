@@ -10,6 +10,7 @@ import {
   buildThreadMessages,
   buildThreadMapMessages,
   buildThreadReduceMessages,
+  buildGroundTruthMessages,
   TASKS,
 } from './tasks.js';
 import * as llm from './llm.js';
@@ -22,6 +23,8 @@ const MAX_UPLOAD = Number(process.env.MAX_UPLOAD_BYTES || 40 * 1024 * 1024);
 const CONTEXT_BUDGET = Number(process.env.CONTEXT_BUDGET_CHARS || 600_000);
 const CHUNK = Number(process.env.CHUNK_CHARS || 48_000);
 const OVERLAP = Number(process.env.CHUNK_OVERLAP_CHARS || 800);
+// Conservative heuristic, not a benchmarked figure — see the route for why.
+const GROUND_TRUTH_MAX_CHARS = Number(process.env.GROUND_TRUTH_MAX_CHARS || 40_000);
 
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: MAX_UPLOAD } });
 
@@ -258,6 +261,64 @@ app.post('/api/threads/:id/saved-responses', (req, res) => {
   if (!ids.length) return res.status(400).json({ error: 'savedResponseIds is required.' });
 
   res.json(db.assignSavedResponsesToThread(id, ids));
+});
+
+/* -------------------------------------------------------------- ground truth */
+
+/** Ask the model to compare a response's wording against the source document. */
+app.post('/api/threads/:id/messages/:messageId/ground-truth', asyncRoute(async (req, res) => {
+  const threadId = Number(req.params.id);
+  const thread = db.getThread(threadId);
+  if (!thread) return res.status(404).json({ error: 'No such thread.' });
+
+  const message = db.getMessage(Number(req.params.messageId));
+  if (!message || message.thread_id !== threadId) return res.status(404).json({ error: 'No such message.' });
+
+  const { text: docText, filename } = db.getThreadDocText(threadId);
+  if (!docText) return res.status(400).json({ error: 'This thread has no document to check against.' });
+
+  // Unlike a normal answer, this asks the model to enumerate every difference
+  // across the whole document — a 268k-char book reliably outran the client's
+  // 5-minute connection timeout in testing (cryptic network error, not a model
+  // failure). Fail fast and clearly instead of hanging; a real fix needs either
+  // a longer timeout or a map-reduce pass, both out of scope for this change.
+  if (docText.length + message.content.length > GROUND_TRUTH_MAX_CHARS) {
+    return res.status(400).json({
+      error: `This document is too large for a single-pass ground-truth check `
+        + `(${(docText.length + message.content.length).toLocaleString()} chars, `
+        + `limit ${GROUND_TRUTH_MAX_CHARS.toLocaleString()}). Try a shorter document or response.`,
+    });
+  }
+
+  const messages = buildGroundTruthMessages({ docText, filename, response: message.content });
+  const chosenModel = thread.model || llm.config().model;
+
+  let result;
+  try {
+    result = await llm.complete(messages, { model: chosenModel });
+  } catch (err) {
+    trace(traceRow({
+      threadId, kind: 'chat', task: 'ground-truth', model: chosenModel, messages, status: 'error', error: err.message,
+    }));
+    return res.status(502).json({ error: err.message });
+  }
+  trace(traceRow({ threadId, kind: 'chat', task: 'ground-truth', model: chosenModel, result, messages }));
+
+  let diff;
+  try {
+    diff = JSON.parse(result.text.trim().replace(/^```(?:json)?\s*/i, '').replace(/```\s*$/, ''));
+    if (!Array.isArray(diff)) throw new Error('response was not a JSON array');
+  } catch (err) {
+    return res.status(502).json({ error: `Model did not return a valid diff (${err.message}). Try again.` });
+  }
+
+  res.json(db.saveGroundTruthCheck({ messageId: message.id, diff, model: result.servedModel || chosenModel }));
+}));
+
+app.get('/api/messages/:id/ground-truth', (req, res) => {
+  const check = db.getGroundTruthCheck(Number(req.params.id));
+  if (!check) return res.status(404).json({ error: 'No ground-truth check yet.' });
+  res.json(check);
 });
 
 /* --------------------------------------------------- threaded inference (SSE) */

@@ -103,6 +103,16 @@ db.exec(`
     UNIQUE(saved_response_id, thread_id)
   );
 
+  -- One row per message, holding the model's own old/new line comparison
+  -- against the source document. Re-running a check replaces it (UNIQUE).
+  CREATE TABLE IF NOT EXISTS ground_truth_checks (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    message_id  INTEGER NOT NULL UNIQUE REFERENCES messages(id) ON DELETE CASCADE,
+    diff_json   TEXT    NOT NULL,
+    model       TEXT,
+    created_at  TEXT    NOT NULL DEFAULT (datetime('now'))
+  );
+
   CREATE INDEX IF NOT EXISTS idx_traces_thread ON traces(thread_id, id);
   CREATE INDEX IF NOT EXISTS idx_traces_message ON traces(message_id);
   CREATE INDEX IF NOT EXISTS idx_traces_created ON traces(created_at DESC);
@@ -223,7 +233,12 @@ export function getThreadDocText(threadId) {
 }
 
 export function getMessages(threadId) {
-  return db.prepare('SELECT * FROM messages WHERE thread_id = ? ORDER BY id ASC').all(threadId);
+  return db
+    .prepare(
+      `SELECT m.*, EXISTS(SELECT 1 FROM ground_truth_checks g WHERE g.message_id = m.id) AS has_ground_truth
+         FROM messages m WHERE m.thread_id = ? ORDER BY m.id ASC`,
+    )
+    .all(threadId);
 }
 
 export function getMessage(id) {
@@ -277,6 +292,23 @@ export function listAssignedSavedResponseIds(threadId) {
     .prepare('SELECT saved_response_id FROM saved_response_threads WHERE thread_id = ?')
     .all(threadId)
     .map((r) => r.saved_response_id);
+}
+
+/* ----------------------------------------------------------- ground truth */
+
+export function getGroundTruthCheck(messageId) {
+  const row = db.prepare('SELECT * FROM ground_truth_checks WHERE message_id = ?').get(messageId);
+  return row ? { ...row, diff: JSON.parse(row.diff_json) } : null;
+}
+
+/** Re-running a check overwrites the previous result for that message. */
+export function saveGroundTruthCheck({ messageId, diff, model }) {
+  db.prepare(
+    `INSERT INTO ground_truth_checks (message_id, diff_json, model) VALUES (?, ?, ?)
+     ON CONFLICT(message_id) DO UPDATE SET diff_json = excluded.diff_json, model = excluded.model,
+       created_at = datetime('now')`,
+  ).run(messageId, JSON.stringify(diff), model ?? null);
+  return getGroundTruthCheck(messageId);
 }
 
 /* ----------------------------------------------------------------- messages */

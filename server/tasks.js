@@ -255,3 +255,36 @@ exactly: NOTHING RELEVANT IN THIS SECTION.`,
     },
   ];
 }
+
+/** "Ground truth" check: does the response's wording actually match the document? */
+export function buildGroundTruthMessages({ docText, filename, response }) {
+  return [
+    {
+      role: 'system',
+      content: `You verify an assistant's response against its source document, running locally on a
+DGX Spark cluster. Compare the RESPONSE against the DOCUMENT and identify every place where the
+response's wording differs from, adds to, or is not supported by the document.
+
+Reply with ONLY a JSON array (no prose, no markdown fences). Each element is an object:
+{"old": "<exact wording from the document, or null if this is new information not in the document>",
+ "new": "<the wording used in the response, or null if the response omits something the document states>"}
+Only include entries where old and new genuinely differ in meaning or wording — do not include
+lines that are already an accurate match. If the response is fully grounded in the document with
+nothing added or changed, reply with exactly: []`,
+    },
+    {
+      role: 'user',
+      content: `Document: ${filename || 'untitled'}
+<document>
+${docText}
+</document>
+
+Response to check:
+<response>
+${response}
+</response>
+
+Return the JSON array now.`,
+    },
+  ];
+}
