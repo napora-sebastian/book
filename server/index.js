@@ -221,6 +221,35 @@ app.delete('/api/threads/:id', (req, res) => {
   res.json({ deleted: db.deleteThread(Number(req.params.id)) });
 });
 
+/* --------------------------------------------------------- saved responses */
+
+app.post('/api/saved-responses', (req, res) => {
+  const message = db.getMessage(Number(req.body?.messageId));
+  if (!message) return res.status(404).json({ error: 'No such message.' });
+
+  res.json(db.saveResponse({
+    messageId: message.id, content: message.content, model: message.model, task: message.task,
+  }));
+});
+
+app.get('/api/saved-responses', (_req, res) => res.json(db.listSavedResponses()));
+
+app.get('/api/threads/:id/saved-responses', (req, res) => {
+  const id = Number(req.params.id);
+  if (!db.getThread(id)) return res.status(404).json({ error: 'No such thread.' });
+  res.json(db.listAssignedSavedResponseIds(id));
+});
+
+app.post('/api/threads/:id/saved-responses', (req, res) => {
+  const id = Number(req.params.id);
+  if (!db.getThread(id)) return res.status(404).json({ error: 'No such thread.' });
+
+  const ids = (req.body?.savedResponseIds || []).map(Number).filter(Number.isFinite);
+  if (!ids.length) return res.status(400).json({ error: 'savedResponseIds is required.' });
+
+  res.json(db.assignSavedResponsesToThread(id, ids));
+});
+
 /* --------------------------------------------------- threaded inference (SSE) */
 
 /**

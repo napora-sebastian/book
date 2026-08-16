@@ -9,6 +9,8 @@ const el = {
   threadUsage: $('threadUsage'), traces: $('traces'), overlay: $('overlay'),
   sheetTitle: $('sheetTitle'), traceScope: $('traceScope'), closeSheet: $('closeSheet'),
   totals: $('totals'), traceList: $('traceList'),
+  savedResponses: $('savedResponses'), savedOverlay: $('savedOverlay'), savedList: $('savedList'),
+  useSavedResponses: $('useSavedResponses'), closeSavedSheet: $('closeSavedSheet'),
 };
 
 const fmtTok = (n) => (n == null ? '—' : n.toLocaleString());
@@ -325,6 +327,13 @@ function messageActions(wrap, m) {
 
   if (m.role === 'user') {
     acts.appendChild(actBtn('✎ Edit', 'Edit and re-run from here', () => beginEdit(wrap, m)));
+  } else {
+    const save = actBtn('☆ Save', 'Save this response for reuse in other threads', async () => {
+      await jsonPost('/api/saved-responses', { messageId: m.id });
+      save.textContent = '★ Saved';
+      setTimeout(() => { save.textContent = '☆ Save'; }, 1200);
+    });
+    acts.appendChild(save);
   }
   return acts;
 }
@@ -645,7 +654,9 @@ el.overlay.addEventListener('click', (e) => {
   if (e.target === el.overlay) el.overlay.classList.add('hidden');
 });
 document.addEventListener('keydown', (e) => {
-  if (e.key === 'Escape') el.overlay.classList.add('hidden');
+  if (e.key !== 'Escape') return;
+  el.overlay.classList.add('hidden');
+  el.savedOverlay.classList.add('hidden');
 });
 
 async function openTraces() {
@@ -710,4 +721,57 @@ async function openTraces() {
         ${t.error ? `<h4>Error</h4><pre>${escapeHtml(t.error)}</pre>` : ''}`;
     });
   });
+}
+
+/* ---------------------------------------------------------- saved responses */
+
+el.savedResponses.addEventListener('click', openSavedResponses);
+el.closeSavedSheet.addEventListener('click', () => el.savedOverlay.classList.add('hidden'));
+el.savedOverlay.addEventListener('click', (e) => {
+  if (e.target === el.savedOverlay) el.savedOverlay.classList.add('hidden');
+});
+el.useSavedResponses.addEventListener('click', useSavedResponses);
+
+async function openSavedResponses() {
+  el.savedOverlay.classList.remove('hidden');
+  el.savedList.innerHTML = '<div class="d">loading…</div>';
+
+  const [rows, assignedIds] = await Promise.all([
+    api('/api/saved-responses'),
+    currentThreadId ? api(`/api/threads/${currentThreadId}/saved-responses`) : Promise.resolve([]),
+  ]);
+
+  el.savedList.innerHTML = rows.length
+    ? rows.map((r) => `
+      <details class="traceRow" data-id="${r.id}">
+        <summary>
+          <input type="checkbox" class="savedCheck" data-id="${r.id}"${assignedIds.includes(r.id) ? ' checked' : ''} />
+          <span class="savedFirstLine">${escapeHtml(r.content.split('\n')[0])}</span>
+          <span class="d">${fmtWhen(r.created_at)}</span>
+        </summary>
+        <div class="savedBody">${escapeHtml(r.content)}</div>
+      </details>`).join('')
+    : '<div class="d">No saved responses yet.</div>';
+
+  el.savedList.querySelectorAll('.savedCheck').forEach((box) => {
+    // Clicking the checkbox must toggle it, not also expand/collapse the
+    // enclosing <summary> — stop the click before it bubbles there.
+    box.addEventListener('click', (e) => e.stopPropagation());
+    box.addEventListener('change', updateUseSavedResponsesState);
+  });
+  updateUseSavedResponsesState();
+}
+
+function updateUseSavedResponsesState() {
+  const any = !!el.savedList.querySelector('.savedCheck:checked');
+  el.useSavedResponses.disabled = !any || !currentThreadId;
+}
+
+async function useSavedResponses() {
+  if (!currentThreadId) return;
+  const ids = [...el.savedList.querySelectorAll('.savedCheck:checked')].map((box) => Number(box.dataset.id));
+  if (!ids.length) return;
+
+  await jsonPost(`/api/threads/${currentThreadId}/saved-responses`, { savedResponseIds: ids });
+  el.savedOverlay.classList.add('hidden');
 }
