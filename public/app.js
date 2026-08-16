@@ -343,10 +343,12 @@ function messageActions(wrap, m) {
   } else {
     acts.appendChild(actBtn('⇩ PDF', 'Save this response as a PDF', () => saveMessageAsPdf(m)));
     const save = actBtn('☆ Save', 'Save this response for reuse in other threads', async () => {
+      if (save.classList.contains('saved')) return;
       await jsonPost('/api/saved-responses', { messageId: m.id });
       save.textContent = '★ Saved';
-      setTimeout(() => { save.textContent = '☆ Save'; }, 1200);
+      save.classList.add('saved');
     });
+    if (m.saved) { save.textContent = '★ Saved'; save.classList.add('saved'); }
     acts.appendChild(save);
   }
   return acts;
@@ -789,6 +791,7 @@ async function openSavedResponses() {
           <input type="checkbox" class="savedCheck" data-id="${r.id}"${assignedIds.includes(r.id) ? ' checked' : ''} />
           <span class="savedFirstLine">${escapeHtml(r.content.split('\n')[0])}</span>
           <span class="d">${fmtWhen(r.created_at)}</span>
+          <button type="button" class="small danger savedRemove" data-id="${r.id}">Remove</button>
         </summary>
         <div class="savedBody">${escapeHtml(r.content)}</div>
       </details>`).join('')
@@ -799,6 +802,18 @@ async function openSavedResponses() {
     // enclosing <summary> — stop the click before it bubbles there.
     box.addEventListener('click', (e) => e.stopPropagation());
     box.addEventListener('change', updateUseSavedResponsesState);
+  });
+  el.savedList.querySelectorAll('.savedRemove').forEach((btn) => {
+    btn.addEventListener('click', async (e) => {
+      e.stopPropagation(); // same reason as the checkbox — don't toggle the row.
+      await api(`/api/saved-responses/${btn.dataset.id}`, { method: 'DELETE' });
+      btn.closest('.traceRow').remove();
+      if (!el.savedList.querySelector('.traceRow')) {
+        el.savedOverlay.classList.add('hidden');
+      } else {
+        updateUseSavedResponsesState();
+      }
+    });
   });
   updateUseSavedResponsesState();
 }

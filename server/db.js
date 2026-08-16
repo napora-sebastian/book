@@ -223,7 +223,12 @@ export function getThreadDocText(threadId) {
 }
 
 export function getMessages(threadId) {
-  return db.prepare('SELECT * FROM messages WHERE thread_id = ? ORDER BY id ASC').all(threadId);
+  return db
+    .prepare(
+      `SELECT m.*, EXISTS(SELECT 1 FROM saved_responses sr WHERE sr.message_id = m.id) AS saved
+         FROM messages m WHERE m.thread_id = ? ORDER BY m.id ASC`,
+    )
+    .all(threadId);
 }
 
 export function getMessage(id) {
@@ -277,6 +282,10 @@ export function listAssignedSavedResponseIds(threadId) {
     .prepare('SELECT saved_response_id FROM saved_response_threads WHERE thread_id = ?')
     .all(threadId)
     .map((r) => r.saved_response_id);
+}
+
+export function deleteSavedResponse(id) {
+  return db.prepare('DELETE FROM saved_responses WHERE id = ?').run(id).changes > 0;
 }
 
 /* ----------------------------------------------------------------- messages */
