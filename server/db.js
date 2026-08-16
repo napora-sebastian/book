@@ -82,12 +82,35 @@ db.exec(`
     created_at        TEXT    NOT NULL DEFAULT (datetime('now'))
   );
 
+  -- A response saved for reuse. The text is snapshotted (not just a
+  -- message_id pointer) so it survives edits or deletion of its source
+  -- thread, the same way a document's text outlives any one thread.
+  CREATE TABLE IF NOT EXISTS saved_responses (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    message_id  INTEGER REFERENCES messages(id) ON DELETE SET NULL,
+    content     TEXT    NOT NULL,
+    model       TEXT,
+    task        TEXT,
+    created_at  TEXT    NOT NULL DEFAULT (datetime('now'))
+  );
+
+  -- Many-to-many: a saved response can be assigned to more than one thread.
+  CREATE TABLE IF NOT EXISTS saved_response_threads (
+    id                 INTEGER PRIMARY KEY AUTOINCREMENT,
+    saved_response_id  INTEGER NOT NULL REFERENCES saved_responses(id) ON DELETE CASCADE,
+    thread_id          INTEGER NOT NULL REFERENCES threads(id) ON DELETE CASCADE,
+    assigned_at        TEXT    NOT NULL DEFAULT (datetime('now')),
+    UNIQUE(saved_response_id, thread_id)
+  );
+
   CREATE INDEX IF NOT EXISTS idx_traces_thread ON traces(thread_id, id);
   CREATE INDEX IF NOT EXISTS idx_traces_message ON traces(message_id);
   CREATE INDEX IF NOT EXISTS idx_traces_created ON traces(created_at DESC);
   CREATE INDEX IF NOT EXISTS idx_messages_thread ON messages(thread_id, id);
   CREATE INDEX IF NOT EXISTS idx_threads_updated ON threads(updated_at DESC);
   CREATE INDEX IF NOT EXISTS idx_documents_created ON documents(created_at DESC);
+  CREATE INDEX IF NOT EXISTS idx_saved_response_threads_thread ON saved_response_threads(thread_id);
+  CREATE INDEX IF NOT EXISTS idx_saved_response_threads_saved ON saved_response_threads(saved_response_id);
 `);
 
 // Columns added after the first release. Existing stores are migrated in place
@@ -203,6 +226,10 @@ export function getMessages(threadId) {
   return db.prepare('SELECT * FROM messages WHERE thread_id = ? ORDER BY id ASC').all(threadId);
 }
 
+export function getMessage(id) {
+  return db.prepare('SELECT * FROM messages WHERE id = ?').get(id) ?? null;
+}
+
 export function renameThread(id, title) {
   db.prepare("UPDATE threads SET title = ?, updated_at = datetime('now') WHERE id = ?").run(title, id);
   return getThread(id);
@@ -221,6 +248,35 @@ export function setThreadDocument(id, documentId) {
 
 export function deleteThread(id) {
   return db.prepare('DELETE FROM threads WHERE id = ?').run(id).changes > 0;
+}
+
+/* --------------------------------------------------------- saved responses */
+
+export function saveResponse({ messageId, content, model, task }) {
+  const { lastInsertRowid } = db
+    .prepare('INSERT INTO saved_responses (message_id, content, model, task) VALUES (?, ?, ?, ?)')
+    .run(messageId ?? null, content, model ?? null, task ?? null);
+  return db.prepare('SELECT * FROM saved_responses WHERE id = ?').get(Number(lastInsertRowid));
+}
+
+export function listSavedResponses() {
+  return db.prepare('SELECT * FROM saved_responses ORDER BY created_at DESC, id DESC').all();
+}
+
+/** Idempotent — re-assigning an id already on the thread is a no-op via UNIQUE. */
+export function assignSavedResponsesToThread(threadId, savedResponseIds) {
+  const insert = db.prepare(
+    'INSERT OR IGNORE INTO saved_response_threads (saved_response_id, thread_id) VALUES (?, ?)',
+  );
+  for (const id of savedResponseIds) insert.run(id, threadId);
+  return listAssignedSavedResponseIds(threadId);
+}
+
+export function listAssignedSavedResponseIds(threadId) {
+  return db
+    .prepare('SELECT saved_response_id FROM saved_response_threads WHERE thread_id = ?')
+    .all(threadId)
+    .map((r) => r.saved_response_id);
 }
 
 /* ----------------------------------------------------------------- messages */

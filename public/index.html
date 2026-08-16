@@ -37,6 +37,7 @@
       </div>
       <div class="topActions">
         <select id="model" title="ds4-non-thinking is fastest; ds4-high/max reason first"></select>
+        <button id="savedResponses" class="small">Saved responses</button>
         <span id="threadUsage" class="usage"></span>
         <button id="traces" class="small">Traces</button>
         <button id="renameThread" class="small" disabled>Rename</button>
@@ -74,6 +75,19 @@
       </header>
       <div id="totals" class="totals"></div>
       <div id="traceList" class="traceList"></div>
+    </div>
+  </div>
+
+  <div id="savedOverlay" class="overlay hidden">
+    <div class="sheet">
+      <header class="sheetTop">
+        <strong>Saved responses</strong>
+        <div class="sheetActions">
+          <button id="useSavedResponses" class="small primary" disabled>Use</button>
+          <button id="closeSavedSheet" class="small">Close</button>
+        </div>
+      </header>
+      <div id="savedList" class="traceList"></div>
     </div>
   </div>
 
