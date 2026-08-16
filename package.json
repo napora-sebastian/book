@@ -11,6 +11,7 @@
     "tunnel": "bash scripts/tunnel.sh"
   },
   "dependencies": {
+    "docx": "^9.7.1",
     "dotenv": "^16.4.5",
     "express": "^4.21.2",
     "mammoth": "^1.8.0",

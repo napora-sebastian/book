@@ -3,6 +3,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import express from 'express';
 import multer from 'multer';
+import { Document, Packer, Paragraph, TextRun } from 'docx';
 
 import { extractText } from './extract.js';
 import { chunkText, estimateTokens } from './chunk.js';
@@ -324,6 +325,45 @@ app.get('/api/messages/:id/ground-truth', (req, res) => {
   if (!check) return res.status(404).json({ error: 'No ground-truth check yet.' });
   res.json(check);
 });
+
+/* -------------------------------------------------------------------- docx */
+
+/**
+ * Unlike the PDF export (a browser print dialog, needs no server support),
+ * there is no browser-native way to write a .docx, so this builds one
+ * server-side with the `docx` package and streams it down as an attachment.
+ */
+app.get('/api/messages/:id/docx', asyncRoute(async (req, res) => {
+  const message = db.getMessage(Number(req.params.id));
+  if (!message) return res.status(404).json({ error: 'No such message.' });
+
+  const thread = db.getThread(message.thread_id);
+  const meta = [message.model, message.task && message.task !== 'chat' ? message.task : null]
+    .filter(Boolean).join(' · ');
+
+  const doc = new Document({
+    sections: [{
+      children: [
+        new Paragraph({ children: [new TextRun({ text: thread?.title || 'Response', bold: true, size: 32 })] }),
+        ...(meta ? [new Paragraph({ children: [new TextRun({ text: meta, color: '6b7280', size: 20 })] })] : []),
+        new Paragraph({ text: '' }),
+        ...message.content.split('\n').map((line) => new Paragraph({ children: [new TextRun(line)] })),
+      ],
+    }],
+  });
+
+  const buffer = await Packer.toBuffer(doc);
+  // Header values must be Latin-1, but thread titles are free text (e.g. Polish
+  // diacritics) — keep an ASCII-only fallback name and the real one via filename*.
+  const rawName = thread?.title || 'response';
+  const utf8Name = rawName.replace(/[^\p{L}\p{N}._-]+/gu, '_').slice(0, 80) || 'response';
+  const asciiName = utf8Name.replace(/[^\x20-\x7e]/g, '_');
+  res.set({
+    'Content-Type': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    'Content-Disposition': `attachment; filename="${asciiName}.docx"; filename*=UTF-8''${encodeURIComponent(utf8Name)}.docx`,
+  });
+  res.send(buffer);
+}));
 
 /* --------------------------------------------------- threaded inference (SSE) */
 
