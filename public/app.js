@@ -223,9 +223,6 @@ el.docVersions.addEventListener('click', () => {
   if (doc) openVersions(doc.id);
 });
 el.closeVersionsSheet.addEventListener('click', () => el.versionsOverlay.classList.add('hidden'));
-el.versionsOverlay.addEventListener('click', (e) => {
-  if (e.target === el.versionsOverlay) el.versionsOverlay.classList.add('hidden');
-});
 el.diffFrom.addEventListener('change', loadDiff);
 el.diffTo.addEventListener('change', loadDiff);
 document.querySelectorAll('input[name="diffMode"]').forEach((r) =>
@@ -382,9 +379,6 @@ el.previewDoc.addEventListener('click', () => {
   if (doc) openPreview(doc);
 });
 el.closePreviewSheet.addEventListener('click', () => el.previewOverlay.classList.add('hidden'));
-el.previewOverlay.addEventListener('click', (e) => {
-  if (e.target === el.previewOverlay) el.previewOverlay.classList.add('hidden');
-});
 
 /**
  * Show the document's content in a modal. PDFs embed the stored bytes in an
@@ -631,9 +625,6 @@ const closeRemove = () => {
 
 el.closeRemoveSheet.addEventListener('click', closeRemove);
 el.cancelRemove.addEventListener('click', closeRemove);
-el.removeOverlay.addEventListener('click', (e) => {
-  if (e.target === el.removeOverlay) closeRemove();
-});
 
 // Trailing whitespace is a typo, not a refusal to confirm; the wrong case is.
 const removeArmed = () => el.removeConfirm.value.trim() === REMOVE_WORD;
@@ -1384,18 +1375,6 @@ function renderStats(s) {
 el.traces.addEventListener('click', openTraces);
 el.closeSheet.addEventListener('click', () => el.overlay.classList.add('hidden'));
 el.traceScope.addEventListener('change', openTraces);
-el.overlay.addEventListener('click', (e) => {
-  if (e.target === el.overlay) el.overlay.classList.add('hidden');
-});
-document.addEventListener('keydown', (e) => {
-  if (e.key !== 'Escape') return;
-  el.overlay.classList.add('hidden');
-  el.savedOverlay.classList.add('hidden');
-  el.groundTruthOverlay.classList.add('hidden');
-  el.versionsOverlay.classList.add('hidden');
-  el.previewOverlay.classList.add('hidden');
-  closeRemove();
-});
 
 async function openTraces() {
   const scoped = el.traceScope.checked && currentThreadId;
@@ -1465,9 +1444,6 @@ async function openTraces() {
 
 el.savedResponses.addEventListener('click', openSavedResponses);
 el.closeSavedSheet.addEventListener('click', () => el.savedOverlay.classList.add('hidden'));
-el.savedOverlay.addEventListener('click', (e) => {
-  if (e.target === el.savedOverlay) el.savedOverlay.classList.add('hidden');
-});
 el.useSavedResponses.addEventListener('click', useSavedResponses);
 
 async function openSavedResponses() {
@@ -1530,9 +1506,6 @@ async function useSavedResponses() {
 /* -------------------------------------------------------------- ground truth */
 
 el.closeGroundTruthSheet.addEventListener('click', () => el.groundTruthOverlay.classList.add('hidden'));
-el.groundTruthOverlay.addEventListener('click', (e) => {
-  if (e.target === el.groundTruthOverlay) el.groundTruthOverlay.classList.add('hidden');
-});
 
 async function openGroundTruth(messageId) {
   el.groundTruthOverlay.classList.remove('hidden');
