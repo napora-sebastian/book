@@ -1,5 +1,6 @@
 import path from 'node:path';
 import mammoth from 'mammoth';
+import rtf from 'rtf-parser';
 
 // pdfjs legacy build runs on the main thread under Node (no worker needed).
 const pdfjsPromise = import('pdfjs-dist/legacy/build/pdf.mjs');
@@ -71,6 +72,35 @@ async function extractDocx(buffer) {
   return { text: value.trim(), warnings };
 }
 
+/**
+ * RTF is a markup format, not plain text — reading the bytes verbatim dumps
+ * `\rtf1\ansi…` control words and `\uc0\u322` escapes into the library. Parse
+ * it so the stored text is the actual prose. The parser hands back a tree of
+ * text runs and paragraph groups; we walk it, joining runs and breaking on
+ * paragraph groups, then collapse the run of blank lines a paragraph break
+ * leaves behind.
+ */
+function extractRtf(buffer) {
+  return new Promise((resolve, reject) => {
+    rtf.string(buffer.toString('utf8'), (err, doc) => {
+      if (err) return reject(err);
+      const parts = [];
+      const walk = (items) => {
+        for (const it of items) {
+          if (typeof it.value === 'string') {
+            parts.push(it.value);
+          } else if (Array.isArray(it.content)) {
+            walk(it.content);
+            parts.push('\n');
+          }
+        }
+      };
+      walk(doc.content);
+      resolve(parts.join('').replace(/\n{3,}/g, '\n\n').trim());
+    });
+  });
+}
+
 export async function extractText(file) {
   const ext = path.extname(file.originalname || '').toLowerCase();
   const mime = file.mimetype || '';
@@ -97,7 +127,13 @@ export async function extractText(file) {
     );
   }
 
-  if (['.txt', '.md', '.markdown', '.rtf', '.csv'].includes(ext) || mime.startsWith('text/')) {
+  if (ext === '.rtf' || mime === 'application/rtf' || mime === 'text/rtf') {
+    const text = await extractRtf(file.buffer);
+    if (!text) throw new Error('The .rtf contained no extractable text.');
+    return { kind: 'text', text };
+  }
+
+  if (['.txt', '.md', '.markdown', '.csv'].includes(ext) || mime.startsWith('text/')) {
     return { kind: 'text', text: file.buffer.toString('utf8').trim() };
   }
 
