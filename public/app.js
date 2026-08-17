@@ -230,6 +230,8 @@ el.diffFrom.addEventListener('change', loadDiff);
 el.diffTo.addEventListener('change', loadDiff);
 document.querySelectorAll('input[name="diffMode"]').forEach((r) =>
   r.addEventListener('change', loadDiff));
+// Ctrl+select a passage in the diff → rewrite it in the changed version.
+el.diffView.addEventListener('mouseup', onSelectRewrite);
 
 let versionsDocId = null;
 let versionsCache = [];   // version rows for the open document
@@ -405,7 +407,7 @@ async function openPreview(doc) {
     const { text } = await api(`/api/documents/${doc.id}/text`);
     el.previewBody.innerHTML = `<pre class="previewText">${escapeHtml(text)}</pre>`;
     // Ctrl+select a passage → offer to have the model rewrite it in place.
-    el.previewBody.querySelector('.previewText').addEventListener('mouseup', onPreviewSelect);
+    el.previewBody.querySelector('.previewText').addEventListener('mouseup', onSelectRewrite);
   } catch (err) {
     el.previewBody.innerHTML = `<div class="diffEmpty">${escapeHtml(err.message)}</div>`;
   }
@@ -413,33 +415,56 @@ async function openPreview(doc) {
 
 /* ------------------------------------------- Ctrl+select inline rewrite */
 
-let previewDocId = null;
 let rewritePopup = null;
+// Where the current rewrite applies: { kind: 'preview', docId } or
+// { kind: 'version', docId, version, root } — root is the element whose text
+// the selection offsets are measured against.
+let rewriteTarget = null;
 
 /**
- * Ctrl+select in the preview: when the mouse button is released over a
- * selection made while Ctrl was held, offer to rewrite that exact passage.
- * The model's rewrite is spliced back into the document at the same place.
+ * Ctrl+select: when the mouse button is released over a selection made while
+ * Ctrl was held, offer to rewrite that exact passage. Works in the preview and
+ * in the versions diff — the model's rewrite is spliced back at the same place
+ * and filed as a new version.
  */
-function onPreviewSelect(e) {
+function onSelectRewrite(e) {
   if (!e.ctrlKey && !e.metaKey) return;
   const sel = window.getSelection();
   if (!sel || sel.isCollapsed) return;
   const text = sel.toString().trim();
   if (!text) return;
 
-  // Only act when the selection lives inside the preview text.
+  // Determine the target: preview text, or a version's diff content.
   const pre = el.previewBody.querySelector('.previewText');
-  if (!pre || !pre.contains(sel.anchorNode) || !pre.contains(sel.focusNode)) return;
+  const inPreview = pre && pre.contains(sel.anchorNode) && pre.contains(sel.focusNode);
+  const inDiff = el.diffView.contains(sel.anchorNode) && el.diffView.contains(sel.focusNode);
+
+  let target = null;
+  if (inPreview) {
+    target = {
+      kind: 'preview',
+      docId: docCache.find((d) => String(d.id) === el.docPick.value)?.id ?? null,
+      root: pre,
+    };
+  } else if (inDiff && versionsDocId != null) {
+    // Rewrite applies to the changed (to) version's text.
+    target = {
+      kind: 'version',
+      docId: versionsDocId,
+      version: diffToV,
+      root: el.diffView,
+    };
+  }
+  if (!target) return;
 
   const rect = sel.getRangeAt(0).getBoundingClientRect();
-  showRewritePopup(rect, text);
+  showRewritePopup(rect, text, target);
 }
 
 /** Small floating bar above the selection: rewrite, or cancel. */
-function showRewritePopup(rect, passage) {
+function showRewritePopup(rect, passage, target) {
   hideRewritePopup();
-  previewDocId = docCache.find((d) => String(d.id) === el.docPick.value)?.id ?? null;
+  rewriteTarget = target;
 
   rewritePopup = document.createElement('div');
   rewritePopup.className = 'rewritePopup';
@@ -479,11 +504,12 @@ function showRewritePopup(rect, passage) {
 function hideRewritePopup() {
   rewritePopup?.remove();
   rewritePopup = null;
+  rewriteTarget = null;
 }
 
 /** Call the model, then splice the rewritten passage back into the document. */
 async function runRewrite(passage) {
-  if (!rewritePopup) return;
+  if (!rewritePopup || !rewriteTarget) return;
   const instr = rewritePopup.querySelector('.rewriteInstr')?.value.trim() || '';
   const go = rewritePopup.querySelector('button.primary');
   go.disabled = true;
@@ -496,32 +522,51 @@ async function runRewrite(passage) {
       model: el.model.value,
     });
 
-    // Splice into the stored document text at the exact selection offset.
-    const pre = el.previewBody.querySelector('.previewText');
-    const sel = window.getSelection();
-    const range = sel?.getRangeAt(0);
-    if (!pre || !range) return;
+    const { docId } = rewriteTarget;
+    let next;
 
-    const start = offsetOf(pre, range.startContainer, range.startOffset);
-    const end = offsetOf(pre, range.endContainer, range.endOffset);
-    const full = pre.textContent;
-    const next = full.slice(0, start) + rewritten + full.slice(end);
-
-    // Update the preview in place and re-render the selection as the new text.
-    pre.textContent = next;
-    hideRewritePopup();
-    sel.removeAllRanges();
-    const r = document.createRange();
-    r.setStart(pre.firstChild, start);
-    r.setEnd(pre.firstChild, start + rewritten.length);
-    sel.addRange(r);
+    if (rewriteTarget.kind === 'preview') {
+      // Splice by DOM offset into the preview's raw text.
+      const root = rewriteTarget.root;
+      const sel = window.getSelection();
+      const range = sel?.getRangeAt(0);
+      if (!root || !range) return;
+      const start = offsetOf(root, range.startContainer, range.startOffset);
+      const end = offsetOf(root, range.endContainer, range.endOffset);
+      const full = root.textContent;
+      next = full.slice(0, start) + rewritten + full.slice(end);
+      root.textContent = next;
+      hideRewritePopup();
+      sel.removeAllRanges();
+      const r = document.createRange();
+      r.setStart(root.firstChild, start);
+      r.setEnd(root.firstChild, start + rewritten.length);
+      sel.addRange(r);
+    } else {
+      // Version diff: the rendered table carries line numbers and marks, so
+      // DOM offsets don't map to the raw text. Instead, replace the selected
+      // passage string in the version's raw text and file a new version.
+      const raw = await versionText(rewriteTarget.version);
+      // The diff renders a leading +/− mark and line numbers; strip any that
+      // leaked into the selection so it matches the raw version text.
+      const clean = passage.replace(/^[+−]\s*/, '').trim();
+      const idx = raw.indexOf(clean);
+      if (idx === -1) {
+        alert('Could not locate the selected passage in the version text.');
+        return;
+      }
+      next = raw.slice(0, idx) + rewritten + raw.slice(idx + clean.length);
+      hideRewritePopup();
+    }
 
     // Persist as a new version so the change is reviewable in the diff.
-    if (previewDocId != null) {
+    if (docId != null) {
       try {
-        await jsonPost(`/api/documents/${previewDocId}/versions`, { text: next });
-        await refreshDocuments(previewDocId);
+        await jsonPost(`/api/documents/${docId}/versions`, { text: next });
+        await refreshDocuments(docId);
         await refreshThreads();
+        // If we rewrote inside the versions modal, refresh the diff too.
+        if (rewriteTarget?.kind === 'version') await loadDiff();
       } catch { /* identical text — nothing to file */ }
     }
   } catch (err) {
