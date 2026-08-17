@@ -7,6 +7,7 @@ import { Document, Packer, Paragraph, TextRun } from 'docx';
 
 import { extractText } from './extract.js';
 import { chunkText, estimateTokens } from './chunk.js';
+import { buildDiff } from './diff.js';
 import {
   buildThreadMessages,
   buildThreadMapMessages,
@@ -165,10 +166,106 @@ app.post('/api/documents', upload.single('file'), asyncRoute(async (req, res) =>
     words: extracted.text.split(/\s+/).filter(Boolean).length,
     pages: extracted.pages ?? null,
     bytes: req.file.size,
+    data: req.file.buffer,
   });
 
   res.json({ ...withoutText(doc), reused, warnings: extracted.warnings ?? [] });
 }));
+
+/** Re-upload into an existing library slot — same id/filename, new content. */
+app.post('/api/documents/:id/replace', upload.single('file'), asyncRoute(async (req, res) => {
+  const id = Number(req.params.id);
+  if (!db.getDocument(id)) return res.status(404).json({ error: 'No such document.' });
+  if (!req.file) return res.status(400).json({ error: 'No file uploaded.' });
+
+  let extracted;
+  try {
+    extracted = await extractText(req.file);
+  } catch (err) {
+    return res.status(422).json({ error: err.message });
+  }
+
+  let result;
+  try {
+    result = db.replaceDocumentContent(id, {
+      kind: extracted.kind,
+      text: extracted.text,
+      words: extracted.text.split(/\s+/).filter(Boolean).length,
+      pages: extracted.pages ?? null,
+      bytes: req.file.size,
+      data: req.file.buffer,
+    });
+  } catch (err) {
+    if (String(err.message).includes('UNIQUE constraint failed')) {
+      return res.status(409).json({ error: 'This exact content already exists as another document in the library.' });
+    }
+    throw err;
+  }
+
+  res.json({
+    ...withoutText(result.doc),
+    reused: false,
+    version: result.version,
+    unchanged: result.unchanged,
+    warnings: extracted.warnings ?? [],
+  });
+}));
+
+/** History rail: every stored state of this document, newest first. */
+app.get('/api/documents/:id/versions', (req, res) => {
+  const id = Number(req.params.id);
+  const doc = db.getDocument(id);
+  if (!doc) return res.status(404).json({ error: 'No such document.' });
+
+  const versions = db.listDocumentVersions(id);
+  // A document uploaded before versioning existed has no rows yet. Rather than
+  // write one on a GET, present its current content as the version 1 it is.
+  res.json({
+    filename: doc.filename,
+    versions: versions.length ? versions : [{
+      document_id: id, version: 1, filename: doc.filename, kind: doc.kind,
+      chars: doc.chars, words: doc.words, pages: doc.pages, bytes: doc.bytes,
+      sha256: doc.sha256, additions: null, deletions: null, created_at: doc.created_at,
+    }],
+  });
+});
+
+/**
+ * Unified diff between two versions of one document, GitHub-style: `from`
+ * defaults to the version before `to`, and `to` defaults to the newest.
+ */
+app.get('/api/documents/:id/diff', (req, res) => {
+  const id = Number(req.params.id);
+  const doc = db.getDocument(id);
+  if (!doc) return res.status(404).json({ error: 'No such document.' });
+
+  const versions = db.listDocumentVersions(id);
+  const newest = versions.length ? versions[0].version : 1;
+  const to = Number(req.query.to || newest);
+  const from = Number(req.query.from ?? to - 1);
+
+  // Version 1 has nothing before it; comparing it to itself is the honest
+  // answer and renders as "no changes" rather than an error.
+  const textOf = (v) => {
+    if (v < 1) return null;
+    const row = db.getDocumentVersion(id, v);
+    if (row) return row.text;
+    return v === 1 ? doc.text : null;
+  };
+
+  const oldText = textOf(from);
+  const newText = textOf(to);
+  if (oldText == null && from >= 1) return res.status(404).json({ error: `No version ${from}.` });
+  if (newText == null) return res.status(404).json({ error: `No version ${to}.` });
+
+  // from = 0 is the state before the first upload: everything reads as added,
+  // which is exactly how the original content should look in a history view.
+  res.json({
+    from: Math.max(from, 0),
+    to,
+    ...buildDiff({ filename: doc.filename, oldText: oldText ?? '', newText }),
+  });
+});
 
 app.get('/api/documents', (_req, res) => {
   res.json(db.listDocuments().map((d) => ({ ...d, estTokens: estimateTokens(d.chars) })));
@@ -177,7 +274,29 @@ app.get('/api/documents', (_req, res) => {
 app.get('/api/documents/:id', (req, res) => {
   const doc = db.getDocument(Number(req.params.id));
   if (!doc) return res.status(404).json({ error: 'No such document.' });
-  res.json(doc);
+  const { data, ...rest } = doc;
+  res.json(rest);
+});
+
+/** Extracted text for the preview modal — docx and text files render from this. */
+app.get('/api/documents/:id/text', (req, res) => {
+  const doc = db.getDocument(Number(req.params.id));
+  if (!doc) return res.status(404).json({ error: 'No such document.' });
+  res.json({ filename: doc.filename, kind: doc.kind, text: doc.text });
+});
+
+/** Raw bytes for the preview modal — only PDFs need this; docx/text preview from the extracted text. */
+app.get('/api/documents/:id/file', (req, res) => {
+  const file = db.getDocumentFile(Number(req.params.id));
+  if (!file || !file.data) return res.status(404).json({ error: 'No stored file for this document.' });
+
+  const contentType = {
+    pdf: 'application/pdf',
+    docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  }[file.kind] || 'text/plain';
+
+  res.set('Content-Type', contentType);
+  res.send(Buffer.from(file.data));
 });
 
 app.delete('/api/documents/:id', (req, res) => {
@@ -645,7 +764,7 @@ const safeParse = (s) => { try { return JSON.parse(s); } catch { return null; } 
 /* -------------------------------------------------------------------- misc */
 
 function withoutText(doc) {
-  const { text, ...rest } = doc;
+  const { text, data, ...rest } = doc;
   return { ...rest, estTokens: estimateTokens(doc.chars) };
 }
 

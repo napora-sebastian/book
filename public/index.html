@@ -14,11 +14,17 @@
     <div class="newThread">
       <label class="lbl" for="docPick">Document</label>
       <select id="docPick"></select>
-      <input id="file" type="file" accept=".pdf,.docx,.txt,.md,.csv" hidden />
+      <input id="file" type="file" accept=".pdf,.docx,.rtf,.txt,.md,.csv" hidden />
+      <input id="replaceFile" type="file" accept=".pdf,.docx,.rtf,.txt,.md,.csv" hidden />
       <div class="row">
         <button id="upload" class="small">Upload file…</button>
         <button id="renameDoc" class="small" disabled>Rename</button>
         <button id="newThread" class="small primary">New thread</button>
+      </div>
+      <div class="row">
+        <button id="previewDoc" class="small" disabled>Preview</button>
+        <button id="replaceDoc" class="small" disabled title="Upload a new copy of this document — the old text is kept as a version">Replace…</button>
+        <button id="docVersions" class="small" disabled title="What changed between versions of this document">Versions</button>
       </div>
       <div id="docMeta" class="docMeta"></div>
     </div>
@@ -100,6 +106,42 @@
         </div>
       </header>
       <div id="groundTruthList" class="diffList"></div>
+    </div>
+  </div>
+
+  <div id="versionsOverlay" class="overlay hidden">
+    <div class="sheet">
+      <header class="sheetTop">
+        <strong id="versionsTitle">Versions</strong>
+        <div class="sheetActions">
+          <button id="closeVersionsSheet" class="small">Close</button>
+        </div>
+      </header>
+      <div class="versionsBody">
+        <div id="versionList" class="versionList"></div>
+        <div class="diffPane">
+          <div class="compareBar">
+            <span class="compareLbl">Comparing</span>
+            <select id="diffFrom"></select>
+            <span class="compareArrow">→</span>
+            <select id="diffTo"></select>
+            <span id="diffStat" class="diffStat"></span>
+          </div>
+          <div id="diffView" class="diffView"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div id="previewOverlay" class="overlay hidden">
+    <div class="sheet previewSheet">
+      <header class="sheetTop">
+        <strong id="previewTitle">Preview</strong>
+        <div class="sheetActions">
+          <button id="closePreviewSheet" class="small">Close</button>
+        </div>
+      </header>
+      <div id="previewBody" class="previewBody"><div class="diffEmpty">loading…</div></div>
     </div>
   </div>
 

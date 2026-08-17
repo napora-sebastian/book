@@ -4,6 +4,11 @@ import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { DatabaseSync } from 'node:sqlite';
 
+// A version's +N −M is derived from the two texts being stored, so it is
+// computed here at write time — the history list would otherwise have to diff
+// every version pair on every open.
+import { diffStat } from './diff.js';
+
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DB_PATH = process.env.DB_PATH || path.join(__dirname, '..', 'data', 'threads.db');
 
@@ -30,6 +35,31 @@ db.exec(`
     bytes       INTEGER,
     sha256      TEXT    NOT NULL UNIQUE,
     created_at  TEXT    NOT NULL DEFAULT (datetime('now'))
+  );
+
+  -- One row per saved state of a document's content, oldest first. Version 1 is
+  -- the original upload and the newest row always mirrors documents.text, so a
+  -- re-upload is a new version rather than a silent overwrite of the source the
+  -- existing threads were answered from.
+  CREATE TABLE IF NOT EXISTS document_versions (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    document_id INTEGER NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+    version     INTEGER NOT NULL,
+    filename    TEXT    NOT NULL,
+    kind        TEXT,
+    -- Extracted text only. The source bytes are deliberately not kept per
+    -- version: a 40 MB book re-uploaded five times would be 200 MB of blob for
+    -- something nothing reads, and the text is what the diff and the model use.
+    text        TEXT    NOT NULL,
+    chars       INTEGER NOT NULL,
+    words       INTEGER,
+    pages       INTEGER,
+    bytes       INTEGER,
+    sha256      TEXT    NOT NULL,
+    additions   INTEGER,                    -- lines against the previous
+    deletions   INTEGER,                    -- version; both NULL on version 1
+    created_at  TEXT    NOT NULL DEFAULT (datetime('now')),
+    UNIQUE(document_id, version)
   );
 
   CREATE TABLE IF NOT EXISTS threads (
@@ -119,15 +149,33 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_messages_thread ON messages(thread_id, id);
   CREATE INDEX IF NOT EXISTS idx_threads_updated ON threads(updated_at DESC);
   CREATE INDEX IF NOT EXISTS idx_documents_created ON documents(created_at DESC);
+  CREATE INDEX IF NOT EXISTS idx_document_versions_doc ON document_versions(document_id, version DESC);
   CREATE INDEX IF NOT EXISTS idx_saved_response_threads_thread ON saved_response_threads(thread_id);
   CREATE INDEX IF NOT EXISTS idx_saved_response_threads_saved ON saved_response_threads(saved_response_id);
 `);
 
 // Columns added after the first release. Existing stores are migrated in place
 // rather than rebuilt, so a book's threads survive an upgrade.
-for (const [table, column, type] of [['traces', 'finish_reason', 'TEXT']]) {
+for (const [table, column, type] of [['traces', 'finish_reason', 'TEXT'], ['documents', 'data', 'BLOB']]) {
   const cols = db.prepare(`PRAGMA table_info(${table})`).all().map((c) => c.name);
   if (!cols.includes(column)) db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${type}`);
+}
+
+/**
+ * Run `fn` as one unit. Writing a document and its version row has to be
+ * all-or-nothing — a half-applied replace would leave the library showing text
+ * that no version records.
+ */
+function inTransaction(fn) {
+  db.exec('BEGIN');
+  try {
+    const out = fn();
+    db.exec('COMMIT');
+    return out;
+  } catch (err) {
+    db.exec('ROLLBACK');
+    throw err;
+  }
 }
 
 /* ---------------------------------------------------------------- documents */
@@ -137,23 +185,116 @@ for (const [table, column, type] of [['traces', 'finish_reason', 'TEXT']]) {
  * before. Hashing the text (not the file bytes) means the same report exported
  * twice from Word still resolves to one library entry.
  */
-export function saveDocument({ filename, kind, text, words, pages, bytes }) {
+export function saveDocument({ filename, kind, text, words, pages, bytes, data }) {
   const sha256 = crypto.createHash('sha256').update(text).digest('hex');
   const existing = db.prepare('SELECT * FROM documents WHERE sha256 = ?').get(sha256);
   if (existing) return { doc: existing, reused: true };
 
-  const { lastInsertRowid } = db
-    .prepare(
-      `INSERT INTO documents (filename, kind, text, chars, words, pages, bytes, sha256)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-    )
-    .run(filename, kind ?? null, text, text.length, words ?? null, pages ?? null, bytes ?? null, sha256);
+  const id = inTransaction(() => {
+    const { lastInsertRowid } = db
+      .prepare(
+        `INSERT INTO documents (filename, kind, text, chars, words, pages, bytes, sha256, data)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(filename, kind ?? null, text, text.length, words ?? null, pages ?? null, bytes ?? null, sha256, data ?? null);
 
-  return { doc: getDocument(Number(lastInsertRowid)), reused: false };
+    const docId = Number(lastInsertRowid);
+    insertVersion(docId, 1, { filename, kind, text, words, pages, bytes, sha256 }, null);
+    return docId;
+  });
+
+  return { doc: getDocument(id), reused: false };
 }
 
 export function getDocument(id) {
   return db.prepare('SELECT * FROM documents WHERE id = ?').get(id) ?? null;
+}
+
+/** Raw bytes for the preview route — kept separate so the normal doc reads never touch the blob. */
+export function getDocumentFile(id) {
+  return db.prepare('SELECT filename, kind, data FROM documents WHERE id = ?').get(id) ?? null;
+}
+
+/**
+ * Overwrite an existing library entry in place — same id and filename, new
+ * text/bytes/hash. Used to let a re-uploaded file replace the one it matches
+ * by name instead of piling up as a second entry.
+ *
+ * The outgoing content is not lost: it stays as its own version row, and the
+ * incoming content is appended as the next one, so the change is reviewable as
+ * a diff afterwards. Re-uploading a byte-identical file is reported as
+ * `unchanged` rather than recorded as a version that changed nothing.
+ */
+export function replaceDocumentContent(id, { kind, text, words, pages, bytes, data }) {
+  const current = getDocument(id);
+  if (!current) return null;
+
+  const sha256 = crypto.createHash('sha256').update(text).digest('hex');
+  if (sha256 === current.sha256) {
+    return { doc: current, version: latestVersionNumber(id), unchanged: true };
+  }
+
+  const version = inTransaction(() => {
+    // Documents stored before versioning existed have no rows at all; their
+    // current content becomes version 1 so the diff has a left-hand side.
+    ensureInitialVersion(id, current);
+
+    db.prepare(
+      `UPDATE documents SET kind = ?, text = ?, chars = ?, words = ?, pages = ?, bytes = ?, sha256 = ?, data = ?
+        WHERE id = ?`,
+    ).run(kind ?? null, text, text.length, words ?? null, pages ?? null, bytes ?? null, sha256, data ?? null, id);
+
+    const next = latestVersionNumber(id) + 1;
+    const { additions, deletions } = diffStat(current.text, text);
+    insertVersion(
+      id,
+      next,
+      { filename: current.filename, kind, text, words, pages, bytes, sha256 },
+      { additions, deletions },
+    );
+    return next;
+  });
+
+  return { doc: getDocument(id), version, unchanged: false };
+}
+
+function insertVersion(documentId, version, v, stat) {
+  db.prepare(
+    `INSERT INTO document_versions
+       (document_id, version, filename, kind, text, chars, words, pages, bytes, sha256, additions, deletions)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+  ).run(
+    documentId, version, v.filename, v.kind ?? null, v.text, v.text.length,
+    v.words ?? null, v.pages ?? null, v.bytes ?? null, v.sha256,
+    stat?.additions ?? null, stat?.deletions ?? null,
+  );
+}
+
+const latestVersionNumber = (documentId) =>
+  db.prepare('SELECT COALESCE(MAX(version), 0) AS v FROM document_versions WHERE document_id = ?')
+    .get(documentId).v;
+
+/** Backfill version 1 for a document that predates the version table. */
+function ensureInitialVersion(id, doc) {
+  if (latestVersionNumber(id) > 0) return;
+  insertVersion(id, 1, doc, null);
+}
+
+/** Version list for the history rail — text excluded, it is only needed to diff. */
+export function listDocumentVersions(documentId) {
+  return db
+    .prepare(
+      `SELECT id, document_id, version, filename, kind, chars, words, pages, bytes,
+              sha256, additions, deletions, created_at
+         FROM document_versions WHERE document_id = ? ORDER BY version DESC`,
+    )
+    .all(documentId);
+}
+
+export function getDocumentVersion(documentId, version) {
+  return db
+    .prepare('SELECT * FROM document_versions WHERE document_id = ? AND version = ?')
+    .get(documentId, version) ?? null;
 }
 
 /** Library list for the "saved files" dropdown — excludes the text column. */
@@ -161,7 +302,9 @@ export function listDocuments(limit = 200) {
   return db
     .prepare(
       `SELECT d.id, d.filename, d.kind, d.chars, d.words, d.pages, d.bytes, d.created_at,
-              (SELECT COUNT(*) FROM threads t WHERE t.document_id = d.id) AS thread_count
+              (SELECT COUNT(*) FROM threads t WHERE t.document_id = d.id) AS thread_count,
+              (SELECT COALESCE(MAX(dv.version), 1) FROM document_versions dv
+                WHERE dv.document_id = d.id) AS version
          FROM documents d
         ORDER BY d.created_at DESC, d.id DESC
         LIMIT ?`,

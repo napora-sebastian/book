@@ -13,6 +13,12 @@ const el = {
   useSavedResponses: $('useSavedResponses'), closeSavedSheet: $('closeSavedSheet'),
   groundTruthOverlay: $('groundTruthOverlay'), groundTruthList: $('groundTruthList'),
   closeGroundTruthSheet: $('closeGroundTruthSheet'),
+  replaceDoc: $('replaceDoc'), replaceFile: $('replaceFile'), docVersions: $('docVersions'),
+  versionsOverlay: $('versionsOverlay'), versionsTitle: $('versionsTitle'),
+  closeVersionsSheet: $('closeVersionsSheet'), versionList: $('versionList'),
+  diffFrom: $('diffFrom'), diffTo: $('diffTo'), diffStat: $('diffStat'), diffView: $('diffView'),
+  previewDoc: $('previewDoc'), previewOverlay: $('previewOverlay'), previewTitle: $('previewTitle'),
+  previewBody: $('previewBody'), closePreviewSheet: $('closePreviewSheet'),
 };
 
 const fmtTok = (n) => (n == null ? '—' : n.toLocaleString());
@@ -91,6 +97,9 @@ async function refreshDocuments(selectId) {
 
 function showDocMeta(doc) {
   el.renameDoc.disabled = !doc;
+  el.replaceDoc.disabled = !doc;
+  el.docVersions.disabled = !doc;
+  el.previewDoc.disabled = !doc;
   el.docMeta.classList.remove('error');
   if (!doc) { el.docMeta.textContent = ''; return; }
   el.docMeta.textContent = [
@@ -99,6 +108,7 @@ function showDocMeta(doc) {
     `${doc.words?.toLocaleString() ?? '?'} words`,
     `~${doc.estTokens.toLocaleString()} tokens`,
     fmtBytes(doc.bytes),
+    doc.version > 1 ? `v${doc.version}` : null,
     doc.thread_count ? `${doc.thread_count} thread(s)` : null,
   ].filter(Boolean).join(' · ');
 }
@@ -160,6 +170,199 @@ el.file.addEventListener('change', async () => {
     el.file.value = '';
   }
 });
+
+/* ------------------------------------------- replacing a document's content */
+
+// A re-upload keeps the library entry and its threads, and files the outgoing
+// text as a version — so "I fixed chapter 3 and re-exported the PDF" stays one
+// document with a history, not two entries with the same name.
+el.replaceDoc.addEventListener('click', () => el.replaceFile.click());
+el.replaceFile.addEventListener('change', async () => {
+  const file = el.replaceFile.files[0];
+  const doc = docCache.find((d) => String(d.id) === el.docPick.value);
+  if (!file || !doc) return;
+
+  el.docMeta.classList.remove('error');
+  el.docMeta.textContent = `replacing with ${file.name}…`;
+
+  const body = new FormData();
+  body.append('file', file);
+  try {
+    const updated = await api(`/api/documents/${doc.id}/replace`, { method: 'POST', body });
+    await refreshDocuments(doc.id);
+    await refreshThreads();
+
+    if (updated.unchanged) {
+      el.docMeta.textContent += ' · identical to the current version, nothing changed';
+      return;
+    }
+    if (updated.warnings?.length) el.docMeta.textContent += ` · ⚠ ${updated.warnings.join('; ')}`;
+    // The point of replacing is seeing what moved, so go straight to the diff.
+    openVersions(doc.id);
+  } catch (err) {
+    el.docMeta.classList.add('error');
+    el.docMeta.textContent = err.message;
+  } finally {
+    el.replaceFile.value = '';
+  }
+});
+
+/* ---------------------------------------------------------- version history */
+
+el.docVersions.addEventListener('click', () => {
+  const doc = docCache.find((d) => String(d.id) === el.docPick.value);
+  if (doc) openVersions(doc.id);
+});
+el.closeVersionsSheet.addEventListener('click', () => el.versionsOverlay.classList.add('hidden'));
+el.versionsOverlay.addEventListener('click', (e) => {
+  if (e.target === el.versionsOverlay) el.versionsOverlay.classList.add('hidden');
+});
+el.diffFrom.addEventListener('change', loadDiff);
+el.diffTo.addEventListener('change', loadDiff);
+
+let versionsDocId = null;
+
+async function openVersions(documentId) {
+  versionsDocId = documentId;
+  el.versionsOverlay.classList.remove('hidden');
+  el.diffView.innerHTML = '<div class="diffEmpty">loading…</div>';
+  el.diffStat.textContent = '';
+
+  const { filename, versions } = await api(`/api/documents/${documentId}/versions`);
+  el.versionsTitle.textContent = `Versions · ${filename}`;
+
+  const newest = versions[0].version;
+  el.versionList.innerHTML = versions.map((v) => `
+    <div class="versionRow${v.version === newest ? ' active' : ''}" data-version="${v.version}">
+      <div class="v">v${v.version}${v.version === newest ? '<span class="tag">current</span>' : ''}</div>
+      <div class="s">${versionStat(v)}</div>
+      <div class="s">${v.pages ? `${v.pages}p · ` : ''}${(v.words ?? 0).toLocaleString()} words · ${fmtWhen(v.created_at)}</div>
+    </div>`).join('');
+
+  el.versionList.querySelectorAll('.versionRow').forEach((row) => {
+    // Picking a version shows what that save changed — the diff against the
+    // one before it, which is the question anyone clicking a history asks.
+    row.addEventListener('click', () => {
+      const v = Number(row.dataset.version);
+      el.diffTo.value = String(v);
+      el.diffFrom.value = String(v - 1);
+      loadDiff();
+    });
+  });
+
+  const label = (v) => `v${v.version} · ${fmtWhen(v.created_at)}`;
+  const options = versions.map((v) => `<option value="${v.version}">${label(v)}</option>`).join('');
+  el.diffFrom.innerHTML = options + '<option value="0">nothing (original upload)</option>';
+  el.diffTo.innerHTML = options;
+  el.diffTo.value = String(newest);
+  el.diffFrom.value = String(newest - 1);
+
+  await loadDiff();
+}
+
+const versionStat = (v) => v.additions == null && v.deletions == null
+  ? 'original upload'
+  : `<span class="add">+${v.additions ?? 0}</span> <span class="del">−${v.deletions ?? 0}</span>`;
+
+async function loadDiff() {
+  if (versionsDocId == null) return;
+  const from = el.diffFrom.value;
+  const to = el.diffTo.value;
+
+  el.versionList.querySelectorAll('.versionRow').forEach((row) =>
+    row.classList.toggle('active', row.dataset.version === to));
+
+  el.diffView.innerHTML = '<div class="diffEmpty">loading…</div>';
+  try {
+    const diff = await api(`/api/documents/${versionsDocId}/diff?from=${from}&to=${to}`);
+    el.diffStat.innerHTML = `<span class="add">+${diff.additions}</span> <span class="del">−${diff.deletions}</span>`;
+    el.diffView.innerHTML = renderDiff(diff);
+  } catch (err) {
+    el.diffStat.textContent = '';
+    el.diffView.innerHTML = `<div class="diffEmpty">${escapeHtml(err.message)}</div>`;
+  }
+}
+
+/* ---------------------------------------------------------------- preview */
+
+el.previewDoc.addEventListener('click', () => {
+  const doc = docCache.find((d) => String(d.id) === el.docPick.value);
+  if (doc) openPreview(doc);
+});
+el.closePreviewSheet.addEventListener('click', () => el.previewOverlay.classList.add('hidden'));
+el.previewOverlay.addEventListener('click', (e) => {
+  if (e.target === el.previewOverlay) el.previewOverlay.classList.add('hidden');
+});
+
+/**
+ * Show the document's content in a modal. PDFs embed the stored bytes in an
+ * <iframe> (the browser's own viewer); docx and text render the extracted text
+ * as a scrollable pre. The preview button is enabled whenever a doc is picked.
+ */
+async function openPreview(doc) {
+  el.previewOverlay.classList.remove('hidden');
+  el.previewTitle.textContent = `Preview · ${doc.filename}`;
+  el.previewBody.innerHTML = '<div class="diffEmpty">loading…</div>';
+
+  if (doc.kind === 'pdf') {
+    // The raw file route serves the exact bytes; the iframe hands off to the
+    // browser's built-in PDF viewer, which is the only sane way to page a book.
+    el.previewBody.innerHTML = `<iframe class="previewFrame" src="/api/documents/${doc.id}/file"></iframe>`;
+    return;
+  }
+
+  try {
+    const { text } = await api(`/api/documents/${doc.id}/text`);
+    el.previewBody.innerHTML = `<pre class="previewText">${escapeHtml(text)}</pre>`;
+  } catch (err) {
+    el.previewBody.innerHTML = `<div class="diffEmpty">${escapeHtml(err.message)}</div>`;
+  }
+}
+
+/* ---------------------------------------------------------------- diff view */
+
+/**
+ * One diff, rendered the way GitHub renders one: a file header carrying the
+ * +/− totals, `@@` hunk headers, both line numbers in their own gutters, and
+ * the changed words marked inside otherwise-similar lines.
+ *
+ * Shared with the ground-truth sheet, which passes findings as hunks and turns
+ * the gutters off — same visual grammar, one implementation.
+ */
+function renderDiff({ filename, additions, deletions, truncated, hunks, gutters = true, empty }) {
+  if (!hunks.length) return `<div class="diffEmpty">${escapeHtml(empty || 'No changes between these versions.')}</div>`;
+
+  const rows = hunks.map((h) => {
+    const head = h.header
+      ? `<tr class="dHunkHead"><td colspan="${gutters ? 3 : 1}">${escapeHtml(h.header)}</td></tr>`
+      : '';
+    return head + h.lines.map((l) => {
+      const cls = l.type === 'add' ? 'dAdd' : l.type === 'del' ? 'dDel' : 'dCtx';
+      const mark = l.type === 'add' ? '+' : l.type === 'del' ? '−' : ' ';
+      const gut = gutters
+        ? `<td class="dLn">${l.oldLine ?? ''}</td><td class="dLn">${l.newLine ?? ''}</td>`
+        : '';
+      return `<tr class="${cls}">${gut}<td class="dCode"><span class="dMark">${mark}</span>${lineHtml(l)}</td></tr>`;
+    }).join('');
+  }).join('');
+
+  return `
+    <div class="diffFile">
+      <div class="diffFileHead">
+        <span class="diffFileName">${escapeHtml(filename ?? '')}</span>
+        <span class="diffStat"><span class="add">+${additions ?? 0}</span> <span class="del">−${deletions ?? 0}</span></span>
+      </div>
+      ${truncated
+        ? '<div class="diffNote">Too many changes to line up precisely — shown as a full replacement.</div>'
+        : ''}
+      <table class="diffTable${gutters ? '' : ' noGutter'}">${rows}</table>
+    </div>`;
+}
+
+/** Word-level spans when the server paired the line with its counterpart. */
+const lineHtml = (l) => (l.parts
+  ? l.parts.map((p) => (p.eq ? escapeHtml(p.text) : `<span class="wch">${escapeHtml(p.text)}</span>`)).join('')
+  : escapeHtml(l.text));
 
 /* ------------------------------------------------------------------- threads */
 
@@ -737,6 +940,8 @@ document.addEventListener('keydown', (e) => {
   el.overlay.classList.add('hidden');
   el.savedOverlay.classList.add('hidden');
   el.groundTruthOverlay.classList.add('hidden');
+  el.versionsOverlay.classList.add('hidden');
+  el.previewOverlay.classList.add('hidden');
 });
 
 async function openTraces() {
@@ -881,11 +1086,22 @@ async function openGroundTruth(messageId) {
   el.groundTruthList.innerHTML = '<div class="d">loading…</div>';
 
   const check = await api(`/api/messages/${messageId}/ground-truth`);
-  el.groundTruthList.innerHTML = check.diff.length
-    ? check.diff.map((d) => `
-      <div class="diffHunk">
-        ${d.old != null ? `<div class="diffLine diffOld">− ${escapeHtml(d.old)}</div>` : ''}
-        ${d.new != null ? `<div class="diffLine diffNew">+ ${escapeHtml(d.new)}</div>` : ''}
-      </div>`).join('')
-    : '<div class="d">Fully grounded in the document — nothing added or changed.</div>';
+
+  // The model returns findings, not line numbers, so each one becomes its own
+  // hunk and the gutters go — otherwise it is the same diff view as the
+  // document history, which is the point: one way to read a change here.
+  el.groundTruthList.innerHTML = renderDiff({
+    filename: `${check.diff.length} finding${check.diff.length === 1 ? '' : 's'} against the source document`,
+    additions: check.diff.filter((d) => d.new != null).length,
+    deletions: check.diff.filter((d) => d.old != null).length,
+    gutters: false,
+    empty: 'Fully grounded in the document — nothing added or changed.',
+    hunks: check.diff.map((d, i) => ({
+      header: `@@ finding ${i + 1} @@`,
+      lines: [
+        d.old != null ? { type: 'del', text: d.old } : null,
+        d.new != null ? { type: 'add', text: d.new } : null,
+      ].filter(Boolean),
+    })),
+  });
 }
