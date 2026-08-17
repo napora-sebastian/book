@@ -113,10 +113,19 @@
   </div>
 
   <div id="versionsOverlay" class="overlay hidden">
-    <div class="sheet">
+    <div class="sheet versionsSheet">
       <header class="sheetTop">
         <strong id="versionsTitle">Versions</strong>
         <div class="sheetActions">
+          <span id="diffStat" class="diffStat"></span>
+          <button id="copyOldVersion" class="small" title="Copy the original (left) text">⧉ Copy original</button>
+          <button id="copyNewVersion" class="small" title="Copy the changed (right) text">⧉ Copy changed</button>
+          <button id="dlOldPdf" class="small" title="Download the original as PDF">⇩ PDF</button>
+          <button id="dlNewPdf" class="small" title="Download the changed as PDF">⇩ PDF</button>
+          <button id="dlOldDocx" class="small" title="Download the original as Word">⇩ DOCX</button>
+          <button id="dlNewDocx" class="small" title="Download the changed as Word">⇩ DOCX</button>
+          <button id="dlOldRtf" class="small" title="Download the original as RTF">⇩ RTF</button>
+          <button id="dlNewRtf" class="small" title="Download the changed as RTF">⇩ RTF</button>
           <button id="closeVersionsSheet" class="small">Close</button>
         </div>
       </header>
@@ -128,7 +137,10 @@
             <select id="diffFrom"></select>
             <span class="compareArrow">→</span>
             <select id="diffTo"></select>
-            <span id="diffStat" class="diffStat"></span>
+            <span class="diffMode">
+              <label><input type="radio" name="diffMode" value="split" checked /> Split</label>
+              <label><input type="radio" name="diffMode" value="unified" /> Unified</label>
+            </span>
           </div>
           <div id="diffView" class="diffView"></div>
         </div>

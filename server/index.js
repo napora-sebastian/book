@@ -13,6 +13,7 @@ import {
   buildThreadMapMessages,
   buildThreadReduceMessages,
   buildGroundTruthMessages,
+  buildRewriteMessages,
   TASKS,
 } from './tasks.js';
 import * as llm from './llm.js';
@@ -477,6 +478,39 @@ app.get('/api/messages/:id/ground-truth', (req, res) => {
   res.json(check);
 });
 
+/* ------------------------------------------------------------ inline rewrite */
+
+/**
+ * Rewrite a single selected passage (Ctrl+select in the preview). The model
+ * returns only the rewritten span, which the client splices back into the
+ * document at the exact place it was marked.
+ */
+app.post('/api/rewrite', asyncRoute(async (req, res) => {
+  const { passage, instruction, model } = req.body || {};
+  if (!passage?.trim()) return res.status(400).json({ error: 'passage is required.' });
+
+  const chosenModel = model || llm.config().model;
+  const messages = buildRewriteMessages({ passage, instruction });
+  const started = Date.now();
+
+  let result;
+  try {
+    result = await llm.complete(messages, { model: chosenModel });
+  } catch (err) {
+    trace(traceRow({
+      threadId: null, kind: 'chat', task: 'rewrite', model: chosenModel, messages, status: 'error', error: err.message,
+    }));
+    return res.status(502).json({ error: err.message });
+  }
+  trace(traceRow({ threadId: null, kind: 'chat', task: 'rewrite', model: chosenModel, result, messages }));
+
+  const rewritten = result.text.trim();
+  if (!rewritten) {
+    return res.status(502).json({ error: 'The model returned an empty rewrite. Try again.' });
+  }
+  res.json({ rewritten, model: result.servedModel || chosenModel, ms: Date.now() - started });
+}));
+
 /* -------------------------------------------------------------------- docx */
 
 /**
@@ -515,6 +549,78 @@ app.get('/api/messages/:id/docx', asyncRoute(async (req, res) => {
   });
   res.send(buffer);
 }));
+
+/* ------------------------------------------------------- version export */
+
+/** Shared download-name helper: ASCII fallback + UTF-8 filename* for diacritics. */
+function downloadName(rawName, ext) {
+  const utf8Name = String(rawName || 'document').replace(/[^\p{L}\p{N}._-]+/gu, '_').slice(0, 80) || 'document';
+  const asciiName = utf8Name.replace(/[^\x20-\x7e]/g, '_');
+  return {
+    'Content-Disposition': `attachment; filename="${asciiName}.${ext}"; filename*=UTF-8''${encodeURIComponent(utf8Name)}.${ext}`,
+  };
+}
+
+/** Resolve a document version's text, or 404. `version` defaults to the newest. */
+function versionTextOr404(res, documentId, version) {
+  const doc = db.getDocument(documentId);
+  if (!doc) return { error: res.status(404).json({ error: 'No such document.' }) };
+
+  const versions = db.listDocumentVersions(documentId);
+  const newest = versions.length ? versions[0].version : 1;
+  const v = Number(version ?? newest);
+
+  const row = db.getDocumentVersion(documentId, v);
+  if (!row) return { error: res.status(404).json({ error: `No version ${v}.` }) };
+  return { doc, row, v };
+}
+
+/** Download a version's text as plain text. */
+app.get('/api/documents/:id/versions/:version/text', (req, res) => {
+  const { error, doc, row } = versionTextOr404(res, Number(req.params.id), req.params.version);
+  if (error) return;
+  res.set({ 'Content-Type': 'text/plain; charset=utf-8', ...downloadName(`${doc.filename} v${row.version}`, 'txt') });
+  res.send(row.text);
+});
+
+/** Download a version's text as .docx, built server-side with the `docx` package. */
+app.get('/api/documents/:id/versions/:version/docx', asyncRoute(async (req, res) => {
+  const { error, doc, row } = versionTextOr404(res, Number(req.params.id), req.params.version);
+  if (error) return;
+
+  const document = new Document({
+    sections: [{
+      children: [
+        new Paragraph({ children: [new TextRun({ text: `${doc.filename} — v${row.version}`, bold: true, size: 28 })] }),
+        new Paragraph({ text: '' }),
+        ...row.text.split('\n').map((line) => new Paragraph({ children: [new TextRun(line)] })),
+      ],
+    }],
+  });
+  const buffer = await Packer.toBuffer(document);
+  res.set({
+    'Content-Type': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    ...downloadName(`${doc.filename} v${row.version}`, 'docx'),
+  });
+  res.send(buffer);
+}));
+
+/** Download a version's text as .rtf (Word-compatible rich text). */
+app.get('/api/documents/:id/versions/:version/rtf', (req, res) => {
+  const { error, doc, row } = versionTextOr404(res, Number(req.params.id), req.params.version);
+  if (error) return;
+
+  const esc = (s) => s
+    .replace(/\\/g, '\\\\')
+    .replace(/\{/g, '\\{')
+    .replace(/\}/g, '\\}')
+    .replace(/\n/g, '\\par\n');
+  const body = row.text.split('\n').map((line) => esc(line)).join('\n\\par\n');
+  const rtf = `{\\rtf1\\ansi\\deff0{\\fonttbl{\\f0\\fnil\\fcharset238 Arial;}}\\f0\\fs24 ${body}\\par}`;
+
+  res.set({ 'Content-Type': 'application/rtf', ...downloadName(`${doc.filename} v${row.version}`, 'rtf') });
+  res.send(Buffer.from(rtf, 'utf8'));
+});
 
 /* --------------------------------------------------- threaded inference (SSE) */
 

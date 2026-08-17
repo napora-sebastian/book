@@ -273,6 +273,21 @@ exactly: NOTHING RELEVANT IN THIS SECTION.`,
   ];
 }
 
+/**
+ * Inline rewrite of a single selected passage (Ctrl+select in the preview).
+ * The model rewrites just the marked text, in place, keeping the manuscript's
+ * voice — the same collaborator prompt as the rewrite task, scoped to a span.
+ */
+export function buildRewriteMessages({ passage, instruction }) {
+  return [
+    { role: 'system', content: AUTHOR },
+    {
+      role: 'user',
+      content: `Rewrite the following passage in the same language and style. Keep the meaning, characters, names, places and narrative voice. Output ONLY the rewritten passage — no preamble, no commentary, no quotation marks around it.\n\n${instruction ? `Instruction: ${instruction}\n\n` : ''}Passage:\n${passage}`,
+    },
+  ];
+}
+
 /** "Ground truth" check: does the response's wording actually match the document? */
 export function buildGroundTruthMessages({ docText, filename, response }) {
   return [

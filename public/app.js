@@ -17,6 +17,10 @@ const el = {
   versionsOverlay: $('versionsOverlay'), versionsTitle: $('versionsTitle'),
   closeVersionsSheet: $('closeVersionsSheet'), versionList: $('versionList'),
   diffFrom: $('diffFrom'), diffTo: $('diffTo'), diffStat: $('diffStat'), diffView: $('diffView'),
+  copyOldVersion: $('copyOldVersion'), copyNewVersion: $('copyNewVersion'),
+  dlOldPdf: $('dlOldPdf'), dlNewPdf: $('dlNewPdf'),
+  dlOldDocx: $('dlOldDocx'), dlNewDocx: $('dlNewDocx'),
+  dlOldRtf: $('dlOldRtf'), dlNewRtf: $('dlNewRtf'),
   previewDoc: $('previewDoc'), previewOverlay: $('previewOverlay'), previewTitle: $('previewTitle'),
   previewBody: $('previewBody'), closePreviewSheet: $('closePreviewSheet'),
   removeDoc: $('removeDoc'), removeOverlay: $('removeOverlay'), removeWhat: $('removeWhat'),
@@ -224,8 +228,13 @@ el.versionsOverlay.addEventListener('click', (e) => {
 });
 el.diffFrom.addEventListener('change', loadDiff);
 el.diffTo.addEventListener('change', loadDiff);
+document.querySelectorAll('input[name="diffMode"]').forEach((r) =>
+  r.addEventListener('change', loadDiff));
 
 let versionsDocId = null;
+let versionsCache = [];   // version rows for the open document
+let diffFromV = 0;        // currently compared versions, for the toolbar
+let diffToV = 1;
 
 async function openVersions(documentId) {
   versionsDocId = documentId;
@@ -234,6 +243,7 @@ async function openVersions(documentId) {
   el.diffStat.textContent = '';
 
   const { filename, versions } = await api(`/api/documents/${documentId}/versions`);
+  versionsCache = versions;
   el.versionsTitle.textContent = `Versions · ${filename}`;
 
   const newest = versions[0].version;
@@ -271,22 +281,97 @@ const versionStat = (v) => v.additions == null && v.deletions == null
 
 async function loadDiff() {
   if (versionsDocId == null) return;
-  const from = el.diffFrom.value;
-  const to = el.diffTo.value;
+  const from = Number(el.diffFrom.value);
+  const to = Number(el.diffTo.value);
+  diffFromV = from;
+  diffToV = to;
 
   el.versionList.querySelectorAll('.versionRow').forEach((row) =>
-    row.classList.toggle('active', row.dataset.version === to));
+    row.classList.toggle('active', row.dataset.version === String(to)));
 
   el.diffView.innerHTML = '<div class="diffEmpty">loading…</div>';
   try {
     const diff = await api(`/api/documents/${versionsDocId}/diff?from=${from}&to=${to}`);
     el.diffStat.innerHTML = `<span class="add">+${diff.additions}</span> <span class="del">−${diff.deletions}</span>`;
-    el.diffView.innerHTML = renderDiff(diff);
+    const mode = document.querySelector('input[name="diffMode"]:checked')?.value || 'split';
+    el.diffView.innerHTML = mode === 'split' ? renderSplitDiff(diff) : renderDiff(diff);
   } catch (err) {
     el.diffStat.textContent = '';
     el.diffView.innerHTML = `<div class="diffEmpty">${escapeHtml(err.message)}</div>`;
   }
 }
+
+/* ------------------------------------------------------- version toolbar */
+
+/** The version text for the toolbar's copy/download buttons. */
+async function versionText(version) {
+  if (version === 0) {
+    // "nothing" — the state before the first upload, i.e. the original text.
+    const doc = docCache.find((d) => d.id === versionsDocId);
+    if (!doc) return '';
+    const { text } = await api(`/api/documents/${versionsDocId}/text`);
+    return text;
+  }
+  const res = await fetch(`/api/documents/${versionsDocId}/versions/${version}/text`);
+  if (!res.ok) throw new Error((await res.json()).error || res.statusText);
+  return res.text();
+}
+
+const versionLabel = (v) => v === 0 ? 'original' : `v${v}`;
+
+el.copyOldVersion.addEventListener('click', async () => {
+  try {
+    await copyText(await versionText(diffFromV));
+    flashBtn(el.copyOldVersion, '✓ Copied');
+  } catch (err) { alert(err.message); }
+});
+el.copyNewVersion.addEventListener('click', async () => {
+  try {
+    await copyText(await versionText(diffToV));
+    flashBtn(el.copyNewVersion, '✓ Copied');
+  } catch (err) { alert(err.message); }
+});
+
+const flashBtn = (btn, text) => {
+  const old = btn.textContent;
+  btn.textContent = text;
+  setTimeout(() => { btn.textContent = old; }, 1200);
+};
+
+/** Open a version's text in a print dialog (browser-native PDF export). */
+async function downloadVersionPdf(version) {
+  try {
+    const text = await versionText(version);
+    const win = window.open('', '_blank');
+    if (!win) return;
+    const title = `${el.versionsTitle.textContent.replace('Versions · ', '')} — ${versionLabel(version)}`;
+    win.document.write(`<!doctype html><html><head><meta charset="utf-8"><title>${escapeHtml(title)}</title>
+<style>
+  body { font: 14px/1.6 ui-sans-serif, -apple-system, "SF Pro Text", system-ui, sans-serif; color: #14171c; padding: 32px; max-width: 720px; margin: 0 auto; }
+  .who { color: #6b7280; font-size: 12px; margin-bottom: 12px; }
+  .body { white-space: pre-wrap; word-wrap: break-word; }
+</style></head><body>
+<div class="who">${escapeHtml(title)}</div>
+<div class="body">${escapeHtml(text)}</div>
+</body></html>`);
+    win.document.close();
+    win.focus();
+    win.print();
+  } catch (err) { alert(err.message); }
+}
+
+const dlVersion = (version, ext) => {
+  const a = document.createElement('a');
+  a.href = `/api/documents/${versionsDocId}/versions/${version}/${ext}`;
+  a.click();
+};
+
+el.dlOldPdf.addEventListener('click', () => downloadVersionPdf(diffFromV));
+el.dlNewPdf.addEventListener('click', () => downloadVersionPdf(diffToV));
+el.dlOldDocx.addEventListener('click', () => dlVersion(diffFromV, 'docx'));
+el.dlNewDocx.addEventListener('click', () => dlVersion(diffToV, 'docx'));
+el.dlOldRtf.addEventListener('click', () => dlVersion(diffFromV, 'rtf'));
+el.dlNewRtf.addEventListener('click', () => dlVersion(diffToV, 'rtf'));
 
 /* ---------------------------------------------------------------- preview */
 
@@ -319,9 +404,146 @@ async function openPreview(doc) {
   try {
     const { text } = await api(`/api/documents/${doc.id}/text`);
     el.previewBody.innerHTML = `<pre class="previewText">${escapeHtml(text)}</pre>`;
+    // Ctrl+select a passage → offer to have the model rewrite it in place.
+    el.previewBody.querySelector('.previewText').addEventListener('mouseup', onPreviewSelect);
   } catch (err) {
     el.previewBody.innerHTML = `<div class="diffEmpty">${escapeHtml(err.message)}</div>`;
   }
+}
+
+/* ------------------------------------------- Ctrl+select inline rewrite */
+
+let previewDocId = null;
+let rewritePopup = null;
+
+/**
+ * Ctrl+select in the preview: when the mouse button is released over a
+ * selection made while Ctrl was held, offer to rewrite that exact passage.
+ * The model's rewrite is spliced back into the document at the same place.
+ */
+function onPreviewSelect(e) {
+  if (!e.ctrlKey && !e.metaKey) return;
+  const sel = window.getSelection();
+  if (!sel || sel.isCollapsed) return;
+  const text = sel.toString().trim();
+  if (!text) return;
+
+  // Only act when the selection lives inside the preview text.
+  const pre = el.previewBody.querySelector('.previewText');
+  if (!pre || !pre.contains(sel.anchorNode) || !pre.contains(sel.focusNode)) return;
+
+  const rect = sel.getRangeAt(0).getBoundingClientRect();
+  showRewritePopup(rect, text);
+}
+
+/** Small floating bar above the selection: rewrite, or cancel. */
+function showRewritePopup(rect, passage) {
+  hideRewritePopup();
+  previewDocId = docCache.find((d) => String(d.id) === el.docPick.value)?.id ?? null;
+
+  rewritePopup = document.createElement('div');
+  rewritePopup.className = 'rewritePopup';
+
+  const label = document.createElement('span');
+  label.className = 'rewriteLbl';
+  label.textContent = `Rewrite ${passage.length.toLocaleString()} chars?`;
+
+  const input = document.createElement('input');
+  input.className = 'rewriteInstr';
+  input.placeholder = 'Optional instruction (e.g. "make it more dramatic")';
+  input.addEventListener('keydown', (ev) => {
+    if (ev.key === 'Enter') { ev.preventDefault(); runRewrite(passage); }
+  });
+
+  const go = document.createElement('button');
+  go.type = 'button';
+  go.className = 'small primary';
+  go.textContent = 'Rewrite';
+  go.addEventListener('click', () => runRewrite(passage));
+
+  const cancel = document.createElement('button');
+  cancel.type = 'button';
+  cancel.className = 'small';
+  cancel.textContent = 'Cancel';
+  cancel.addEventListener('click', hideRewritePopup);
+
+  rewritePopup.append(label, input, go, cancel);
+  document.body.appendChild(rewritePopup);
+
+  const r = rewritePopup.getBoundingClientRect();
+  rewritePopup.style.left = `${Math.min(rect.left, window.innerWidth - r.width - 12)}px`;
+  rewritePopup.style.top = `${Math.max(8, rect.top - r.height - 8)}px`;
+  input.focus();
+}
+
+function hideRewritePopup() {
+  rewritePopup?.remove();
+  rewritePopup = null;
+}
+
+/** Call the model, then splice the rewritten passage back into the document. */
+async function runRewrite(passage) {
+  if (!rewritePopup) return;
+  const instr = rewritePopup.querySelector('.rewriteInstr')?.value.trim() || '';
+  const go = rewritePopup.querySelector('button.primary');
+  go.disabled = true;
+  go.textContent = 'Rewriting…';
+
+  try {
+    const { rewritten } = await jsonPost('/api/rewrite', {
+      passage,
+      instruction: instr,
+      model: el.model.value,
+    });
+
+    // Splice into the stored document text at the exact selection offset.
+    const pre = el.previewBody.querySelector('.previewText');
+    const sel = window.getSelection();
+    const range = sel?.getRangeAt(0);
+    if (!pre || !range) return;
+
+    const start = offsetOf(pre, range.startContainer, range.startOffset);
+    const end = offsetOf(pre, range.endContainer, range.endOffset);
+    const full = pre.textContent;
+    const next = full.slice(0, start) + rewritten + full.slice(end);
+
+    // Update the preview in place and re-render the selection as the new text.
+    pre.textContent = next;
+    hideRewritePopup();
+    sel.removeAllRanges();
+    const r = document.createRange();
+    r.setStart(pre.firstChild, start);
+    r.setEnd(pre.firstChild, start + rewritten.length);
+    sel.addRange(r);
+
+    // Persist as a new version so the change is reviewable in the diff.
+    if (previewDocId != null) {
+      try {
+        await jsonPost(`/api/documents/${previewDocId}/versions`, { text: next });
+        await refreshDocuments(previewDocId);
+        await refreshThreads();
+      } catch { /* identical text — nothing to file */ }
+    }
+  } catch (err) {
+    alert(err.message);
+  } finally {
+    if (rewritePopup) {
+      go.disabled = false;
+      go.textContent = 'Rewrite';
+    }
+  }
+}
+
+/** Character offset of a text node/offset pair within a parent element. */
+function offsetOf(root, node, offset) {
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+  let total = 0;
+  let cur;
+  while ((cur = walker.nextNode())) {
+    if (cur === node) return total + offset;
+    total += cur.textContent.length;
+  }
+  return total;
 }
 
 /* --------------------------------------------------------- removing a document */
@@ -451,6 +673,60 @@ function renderDiff({ filename, additions, deletions, truncated, hunks, gutters 
 const lineHtml = (l) => (l.parts
   ? l.parts.map((p) => (p.eq ? escapeHtml(p.text) : `<span class="wch">${escapeHtml(p.text)}</span>`)).join('')
   : escapeHtml(l.text));
+
+/**
+ * GitHub-style split view: original on the left, changed on the right, one row
+ * per line pair. Deleted lines show red on the left with a blank right cell;
+ * added lines show green on the right with a blank left cell; unchanged lines
+ * span both sides. Word-level changes are highlighted inside each side.
+ */
+function renderSplitDiff({ filename, additions, deletions, truncated, hunks, empty }) {
+  if (!hunks.length) return `<div class="diffEmpty">${escapeHtml(empty || 'No changes between these versions.')}</div>`;
+
+  const rows = hunks.map((h) => {
+    const head = h.header
+      ? `<tr class="dHunkHead"><td colspan="4">${escapeHtml(h.header)}</td></tr>`
+      : '';
+    const body = h.lines.map((l) => {
+      if (l.type === 'ctx') {
+        return `<tr class="dCtx">
+          <td class="dLn">${l.oldLine ?? ''}</td>
+          <td class="dCode">${lineHtml(l)}</td>
+          <td class="dLn">${l.newLine ?? ''}</td>
+          <td class="dCode">${lineHtml(l)}</td>
+        </tr>`;
+      }
+      if (l.type === 'del') {
+        return `<tr class="dDel">
+          <td class="dLn">${l.oldLine ?? ''}</td>
+          <td class="dCode"><span class="dMark">−</span>${lineHtml(l)}</td>
+          <td class="dLn"></td>
+          <td class="dCode"></td>
+        </tr>`;
+      }
+      // add
+      return `<tr class="dAdd">
+        <td class="dLn"></td>
+        <td class="dCode"></td>
+        <td class="dLn">${l.newLine ?? ''}</td>
+        <td class="dCode"><span class="dMark">+</span>${lineHtml(l)}</td>
+      </tr>`;
+    }).join('');
+    return head + body;
+  }).join('');
+
+  return `
+    <div class="diffFile">
+      <div class="diffFileHead">
+        <span class="diffFileName">${escapeHtml(filename ?? '')}</span>
+        <span class="diffStat"><span class="add">+${additions ?? 0}</span> <span class="del">−${deletions ?? 0}</span></span>
+      </div>
+      ${truncated
+        ? '<div class="diffNote">Too many changes to line up precisely — shown as a full replacement.</div>'
+        : ''}
+      <table class="diffTable split">${rows}</table>
+    </div>`;
+}
 
 /* ------------------------------------------------------------------- threads */
 
