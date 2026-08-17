@@ -26,6 +26,9 @@
         <button id="replaceDoc" class="small" disabled title="Upload a new copy of this document — the old text is kept as a version">Replace…</button>
         <button id="docVersions" class="small" disabled title="What changed between versions of this document">Versions</button>
       </div>
+      <div class="row">
+        <button id="removeDoc" class="small destructive" disabled title="Delete this document and its whole version history — cannot be undone">Remove</button>
+      </div>
       <div id="docMeta" class="docMeta"></div>
     </div>
 
@@ -142,6 +145,29 @@
         </div>
       </header>
       <div id="previewBody" class="previewBody"><div class="diffEmpty">loading…</div></div>
+    </div>
+  </div>
+
+  <div id="removeOverlay" class="overlay hidden">
+    <div class="sheet confirmSheet">
+      <header class="sheetTop">
+        <strong>Remove document</strong>
+        <div class="sheetActions">
+          <button id="closeRemoveSheet" class="small">Close</button>
+        </div>
+      </header>
+      <div class="confirmBody">
+        <p class="confirmWarn">⚠ This cannot be undone.</p>
+        <p id="removeWhat" class="confirmWhat"></p>
+        <label class="confirmLbl" for="removeConfirm">To confirm, type <code>REMOVE</code> below</label>
+        <input id="removeConfirm" type="text" class="confirmInput" placeholder="REMOVE"
+               autocomplete="off" autocapitalize="off" spellcheck="false" />
+        <div id="removeError" class="confirmError"></div>
+        <div class="confirmActions">
+          <button id="confirmRemove" class="destructive" disabled>Remove document</button>
+          <button id="cancelRemove" class="small">Cancel</button>
+        </div>
+      </div>
     </div>
   </div>
 

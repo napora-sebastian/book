@@ -219,6 +219,12 @@ button:disabled { opacity: .45; cursor: not-allowed; }
 button.small { padding: 6px 9px; font-size: 12px; }
 button.primary { background: var(--accent); border-color: var(--accent); color: #0b0e11; font-weight: 600; }
 button.danger:hover:not(:disabled) { border-color: var(--err); color: var(--err); }
+/* Filled red, not a red hover like .danger — this one destroys stored work, and
+   should never be mistaken for the button next to it. */
+button.destructive {
+  background: var(--err); border-color: var(--err); color: #2a0808; font-weight: 600;
+}
+button.destructive:hover:not(:disabled) { border-color: var(--err); filter: brightness(1.08); }
 
 .hidden { display: none !important; }
 
@@ -409,6 +415,27 @@ tr.dDel .wch { background: var(--diffDelWord); }
   font: 13px/1.7 ui-monospace, SFMono-Regular, Menlo, monospace;
   white-space: pre-wrap; word-break: break-word;
 }
+
+/* --------------------------------------------- type-the-word confirm dialog */
+
+.confirmSheet { width: min(460px, 100%); }
+.confirmBody { padding: 14px 15px 16px; }
+.confirmWarn { color: var(--err); font-size: 13px; font-weight: 600; margin: 0 0 8px; }
+.confirmWhat { font-size: 13px; margin: 0 0 14px; }
+.confirmLbl { display: block; font-size: 12.5px; color: var(--dim); margin-bottom: 6px; }
+.confirmLbl code {
+  font: 12px ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--fg);
+  background: var(--panel); border: 1px solid var(--line); border-radius: 4px; padding: 1px 5px;
+}
+.confirmInput {
+  width: 100%; background: var(--panel); color: var(--fg);
+  border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px;
+  font: 13px ui-monospace, SFMono-Regular, Menlo, monospace; letter-spacing: .06em;
+}
+.confirmInput:focus { outline: none; border-color: var(--err); }
+.confirmError { color: var(--err); font-size: 12px; margin-top: 8px; }
+.confirmError:empty { display: none; }
+.confirmActions { display: flex; gap: 8px; margin-top: 14px; }
 
 .savedFirstLine {
   flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;

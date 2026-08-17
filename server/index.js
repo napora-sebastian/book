@@ -326,8 +326,13 @@ app.get('/api/documents/:id/file', (req, res) => {
   res.send(Buffer.from(file.data));
 });
 
+// Takes the stored bytes and every filed version with it. Threads survive with
+// their history; their document_id goes NULL. The UI gates this behind a
+// type-the-word dialog, so a 404 here means the library list was stale.
 app.delete('/api/documents/:id', (req, res) => {
-  res.json({ deleted: db.deleteDocument(Number(req.params.id)) });
+  const id = Number(req.params.id);
+  if (!db.getDocument(id)) return res.status(404).json({ error: 'No such document.' });
+  res.json({ deleted: db.deleteDocument(id) });
 });
 
 app.patch('/api/documents/:id', (req, res) => {

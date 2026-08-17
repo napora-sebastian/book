@@ -19,6 +19,10 @@ const el = {
   diffFrom: $('diffFrom'), diffTo: $('diffTo'), diffStat: $('diffStat'), diffView: $('diffView'),
   previewDoc: $('previewDoc'), previewOverlay: $('previewOverlay'), previewTitle: $('previewTitle'),
   previewBody: $('previewBody'), closePreviewSheet: $('closePreviewSheet'),
+  removeDoc: $('removeDoc'), removeOverlay: $('removeOverlay'), removeWhat: $('removeWhat'),
+  removeConfirm: $('removeConfirm'), removeError: $('removeError'),
+  confirmRemove: $('confirmRemove'), cancelRemove: $('cancelRemove'),
+  closeRemoveSheet: $('closeRemoveSheet'),
 };
 
 const fmtTok = (n) => (n == null ? '—' : n.toLocaleString());
@@ -100,6 +104,7 @@ function showDocMeta(doc) {
   el.replaceDoc.disabled = !doc;
   el.docVersions.disabled = !doc;
   el.previewDoc.disabled = !doc;
+  el.removeDoc.disabled = !doc;
   el.docMeta.classList.remove('error');
   if (!doc) { el.docMeta.textContent = ''; return; }
   el.docMeta.textContent = [
@@ -318,6 +323,89 @@ async function openPreview(doc) {
     el.previewBody.innerHTML = `<div class="diffEmpty">${escapeHtml(err.message)}</div>`;
   }
 }
+
+/* --------------------------------------------------------- removing a document */
+
+/** Typed exactly, the way AWS gates a bucket delete. Case matters. */
+const REMOVE_WORD = 'REMOVE';
+
+let removeDocId = null;
+
+// Removal takes the document, its stored bytes and every filed version with it,
+// and no other screen in the app can bring any of that back — so a one-key
+// confirm() would be too cheap a gate. The word has to be typed out.
+el.removeDoc.addEventListener('click', () => {
+  const doc = docCache.find((d) => String(d.id) === el.docPick.value);
+  if (!doc) return;
+  removeDocId = doc.id;
+
+  const alsoGone = doc.version > 1
+    ? `, along with all ${doc.version} of its saved versions`
+    : ', along with its extracted text and the uploaded file';
+  const threads = doc.thread_count
+    ? ` ${doc.thread_count} thread${doc.thread_count === 1 ? '' : 's'} built on it keep their messages but lose the document — every later turn there answers as plain chat.`
+    : '';
+
+  el.removeWhat.innerHTML =
+    `<strong>${escapeHtml(doc.filename)}</strong> will be deleted permanently${alsoGone}.${threads}`;
+
+  el.removeError.textContent = '';
+  el.removeConfirm.value = '';
+  el.confirmRemove.disabled = true;
+  el.confirmRemove.textContent = 'Remove document';
+  el.removeOverlay.classList.remove('hidden');
+  el.removeConfirm.focus();
+});
+
+const closeRemove = () => {
+  el.removeOverlay.classList.add('hidden');
+  removeDocId = null;
+};
+
+el.closeRemoveSheet.addEventListener('click', closeRemove);
+el.cancelRemove.addEventListener('click', closeRemove);
+el.removeOverlay.addEventListener('click', (e) => {
+  if (e.target === el.removeOverlay) closeRemove();
+});
+
+// Trailing whitespace is a typo, not a refusal to confirm; the wrong case is.
+const removeArmed = () => el.removeConfirm.value.trim() === REMOVE_WORD;
+
+el.removeConfirm.addEventListener('input', () => {
+  el.confirmRemove.disabled = !removeArmed();
+});
+el.removeConfirm.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter' && removeArmed()) el.confirmRemove.click();
+});
+
+el.confirmRemove.addEventListener('click', async () => {
+  if (removeDocId == null || !removeArmed()) return;
+
+  const id = removeDocId;
+  const name = docCache.find((d) => d.id === id)?.filename ?? 'Document';
+
+  el.removeError.textContent = '';
+  el.confirmRemove.disabled = true;
+  el.confirmRemove.textContent = 'Removing…';
+
+  try {
+    await api(`/api/documents/${id}`, { method: 'DELETE' });
+  } catch (err) {
+    el.removeError.textContent = err.message;
+    el.confirmRemove.disabled = false;
+    el.confirmRemove.textContent = 'Remove document';
+    return;
+  }
+
+  closeRemove();
+  await refreshDocuments();
+  // The open thread may have just lost its document — reload it so the header
+  // and the picker say so, instead of naming a file that no longer exists.
+  if (currentThreadId) await openThread(currentThreadId);
+  else await refreshThreads();
+  renderStats((await api('/api/config')).stats);
+  el.docMeta.textContent = `${name} removed from the library`;
+});
 
 /* ---------------------------------------------------------------- diff view */
 
@@ -985,6 +1073,7 @@ document.addEventListener('keydown', (e) => {
   el.groundTruthOverlay.classList.add('hidden');
   el.versionsOverlay.classList.add('hidden');
   el.previewOverlay.classList.add('hidden');
+  closeRemove();
 });
 
 async function openTraces() {
