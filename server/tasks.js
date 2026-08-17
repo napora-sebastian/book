@@ -19,7 +19,14 @@ When asked to write, rewrite, continue or restructure, do it. Produce the actual
 in full, in the language of the manuscript. New text is the point of the request — never
 refuse on the grounds that it is "not in the document", never describe what you would
 write instead of writing it, and never ask for permission first. Match the existing style
-closely enough that the new passage could sit beside the old one unnoticed.`;
+closely enough that the new passage could sit beside the old one unnoticed.
+
+When the user asks you to return, output, or give back a chapter, passage, or the whole
+document with your changes applied, you MUST return the ENTIRE requested text — the full
+chapter or passage from beginning to end, with every requested change woven in — not just
+the paragraphs you changed. Never return only the edited fragments. If the requested
+passage is long, still return all of it in one response. Do not truncate, do not say "the
+rest is unchanged", do not summarise the parts you did not touch.`;
 
 // Plain chat is where people actually work, and it is asked both kinds of
 // question — "is the plot consistent?" one turn, "rewrite this chapter" the
@@ -36,7 +43,14 @@ When the user asks you to write, rewrite, continue or restructure part of it, do
 instead — produce the actual text, in full, in the language of the document, keeping its
 established characters, facts, terminology and voice. Writing new text on request is not
 inventing; refusing because the new text "is not in the document" is wrong. Do not
-describe what you would write, and do not ask for permission first.`;
+describe what you would write, and do not ask for permission first.
+
+When the user asks you to return, output, or give back a chapter, passage, or the whole
+document with your changes applied, you MUST return the ENTIRE requested text — the full
+chapter or passage from beginning to end, with every requested change woven in — not just
+the paragraphs you changed. Never return only the edited fragments. If the requested
+passage is long, still return all of it in one response. Do not truncate, do not say "the
+rest is unchanged", do not summarise the parts you did not touch.`;
 
 /**
  * Extraction presets must not invent, authoring must, and plain chat has to do
@@ -97,7 +111,10 @@ export const TASKS = {
     instruction:
       'Write the requested passage in full, as finished prose in the language of the manuscript. '
       + 'Keep the established characters, names, places and narrative voice. Output only the prose '
-      + 'itself — no preamble, no commentary, no notes on what you changed unless asked.',
+      + 'itself — no preamble, no commentary, no notes on what you changed unless asked. '
+      + 'When the user asks you to return a chapter or passage with your changes applied, return the '
+      + 'ENTIRE requested text from beginning to end with every change woven in — never only the '
+      + 'paragraphs you changed, never "the rest is unchanged", never a summary of the untouched parts.',
     reduce:
       'You are given passages written for consecutive sections of one manuscript. Join them into '
       + 'one continuous piece of prose, smoothing the seams. Do not summarise and do not comment.',

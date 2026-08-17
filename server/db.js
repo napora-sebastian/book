@@ -58,6 +58,7 @@ db.exec(`
     sha256      TEXT    NOT NULL,
     additions   INTEGER,                    -- lines against the previous
     deletions   INTEGER,                    -- version; both NULL on version 1
+    source_message_id INTEGER,              -- message whose model text created this version
     created_at  TEXT    NOT NULL DEFAULT (datetime('now')),
     UNIQUE(document_id, version)
   );
@@ -156,7 +157,11 @@ db.exec(`
 
 // Columns added after the first release. Existing stores are migrated in place
 // rather than rebuilt, so a book's threads survive an upgrade.
-for (const [table, column, type] of [['traces', 'finish_reason', 'TEXT'], ['documents', 'data', 'BLOB']]) {
+for (const [table, column, type] of [
+  ['traces', 'finish_reason', 'TEXT'],
+  ['documents', 'data', 'BLOB'],
+  ['document_versions', 'source_message_id', 'INTEGER'],
+]) {
   const cols = db.prepare(`PRAGMA table_info(${table})`).all().map((c) => c.name);
   if (!cols.includes(column)) db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${type}`);
 }
@@ -280,12 +285,47 @@ function ensureInitialVersion(id, doc) {
   insertVersion(id, 1, doc, null);
 }
 
+/**
+ * File a model's rewritten text as the next version of a document, without
+ * touching the stored document itself. The model's answer is a candidate
+ * revision, not the new source of truth — the user reviews it in the diff
+ * first, and only a manual "Replace…" upload promotes it to the live text.
+ * Returns null when the text is identical to the current version.
+ */
+export function saveModelVersion(documentId, { text, sourceMessageId, model }) {
+  const current = getDocument(documentId);
+  if (!current) return null;
+
+  const sha256 = crypto.createHash('sha256').update(text).digest('hex');
+  if (sha256 === current.sha256) return null;
+
+  let stat;
+  const version = inTransaction(() => {
+    ensureInitialVersion(documentId, current);
+    const next = latestVersionNumber(documentId) + 1;
+    stat = diffStat(current.text, text);
+    insertVersion(
+      documentId,
+      next,
+      { filename: current.filename, kind: current.kind, text, words: text.split(/\s+/).filter(Boolean).length, pages: current.pages, bytes: current.bytes, sha256 },
+      stat,
+    );
+    if (sourceMessageId != null) {
+      db.prepare('UPDATE document_versions SET source_message_id = ? WHERE document_id = ? AND version = ?')
+        .run(sourceMessageId, documentId, next);
+    }
+    return next;
+  });
+
+  return { version, additions: stat.additions, deletions: stat.deletions };
+}
+
 /** Version list for the history rail — text excluded, it is only needed to diff. */
 export function listDocumentVersions(documentId) {
   return db
     .prepare(
       `SELECT id, document_id, version, filename, kind, chars, words, pages, bytes,
-              sha256, additions, deletions, created_at
+              sha256, additions, deletions, source_message_id, created_at
          FROM document_versions WHERE document_id = ? ORDER BY version DESC`,
     )
     .all(documentId);

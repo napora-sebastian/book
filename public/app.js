@@ -546,6 +546,12 @@ function messageActions(wrap, m) {
   if (m.role === 'user') {
     acts.appendChild(actBtn('✎ Edit', 'Edit and re-run from here', () => beginEdit(wrap, m)));
   } else {
+    // The model's rewritten text becomes a reviewable version of the attached
+    // document — the diff shows exactly what changed, GitHub-style.
+    if (currentThreadId && docCache.some((d) => d.id === threadDocId())) {
+      const saveVer = actBtn('⤓ Save as version', 'File this response as a new version of the attached document', () => saveAsVersion(m, saveVer));
+      acts.appendChild(saveVer);
+    }
     acts.appendChild(actBtn('⇩ PDF', 'Save this response as a PDF', () => saveMessageAsPdf(m)));
     acts.appendChild(actBtn('⇩ DOCX', 'Save this response as a Word document', () => downloadMessageAsDocx(m)));
     const save = actBtn('☆ Save', 'Save this response for reuse in other threads', async () => {
@@ -584,6 +590,43 @@ function messageActions(wrap, m) {
     acts.appendChild(gt);
   }
   return acts;
+}
+
+/** The document id bound to the open thread, or null when none is attached. */
+const threadDocId = () => {
+  const thread = docCache.find((d) => String(d.id) === el.docPick.value);
+  return thread ? thread.id : null;
+};
+
+/**
+ * File the model's answer as a new version of the attached document. The
+ * stored document is not touched — the version is a candidate revision, and
+ * the diff modal opens so the user can review exactly what changed.
+ */
+async function saveAsVersion(m, btn) {
+  const docId = threadDocId();
+  if (docId == null) return;
+
+  btn.disabled = true;
+  btn.textContent = '⤓ Saving…';
+
+  try {
+    await jsonPost(`/api/documents/${docId}/versions`, {
+      text: m.content,
+      messageId: m.id,
+      threadId: currentThreadId,
+      model: m.model,
+    });
+    await refreshDocuments(docId);
+    await refreshThreads();
+    btn.textContent = '✓ Saved';
+    btn.classList.add('saved');
+    openVersions(docId);
+  } catch (err) {
+    btn.textContent = '⤓ Save as version';
+    btn.disabled = false;
+    alert(err.message);
+  }
 }
 
 /**

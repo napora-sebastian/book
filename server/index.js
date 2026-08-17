@@ -231,6 +231,33 @@ app.get('/api/documents/:id/versions', (req, res) => {
 });
 
 /**
+ * File a model's rewritten text as the next version of a document. The stored
+ * document is left untouched — the model's answer is a candidate revision the
+ * user reviews in the diff before a manual "Replace…" upload promotes it.
+ */
+app.post('/api/documents/:id/versions', (req, res) => {
+  const id = Number(req.params.id);
+  const doc = db.getDocument(id);
+  if (!doc) return res.status(404).json({ error: 'No such document.' });
+
+  const text = (req.body?.text ?? '').trim();
+  if (!text) return res.status(400).json({ error: 'text is required.' });
+
+  const messageId = req.body?.messageId != null ? Number(req.body.messageId) : null;
+  if (messageId != null) {
+    const message = db.getMessage(messageId);
+    if (!message || message.thread_id !== Number(req.body.threadId)) {
+      return res.status(400).json({ error: 'messageId does not belong to this thread.' });
+    }
+  }
+
+  const saved = db.saveModelVersion(id, { text, sourceMessageId: messageId, model: req.body?.model ?? null });
+  if (!saved) return res.status(409).json({ error: 'This text is identical to the current version — nothing to save.' });
+
+  res.json({ ...saved, filename: doc.filename });
+});
+
+/**
  * Unified diff between two versions of one document, GitHub-style: `from`
  * defaults to the version before `to`, and `to` defaults to the newest.
  */
