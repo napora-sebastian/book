@@ -17,16 +17,23 @@ const el = {
   versionsOverlay: $('versionsOverlay'), versionsTitle: $('versionsTitle'),
   closeVersionsSheet: $('closeVersionsSheet'), versionList: $('versionList'),
   diffFrom: $('diffFrom'), diffTo: $('diffTo'), diffStat: $('diffStat'), diffView: $('diffView'),
+  backToPreview: $('backToPreview'),
   copyOldVersion: $('copyOldVersion'), copyNewVersion: $('copyNewVersion'),
   dlOldPdf: $('dlOldPdf'), dlNewPdf: $('dlNewPdf'),
   dlOldDocx: $('dlOldDocx'), dlNewDocx: $('dlNewDocx'),
   dlOldRtf: $('dlOldRtf'), dlNewRtf: $('dlNewRtf'),
+  exportOldLabel: $('exportOldLabel'), exportNewLabel: $('exportNewLabel'),
+  exportOldHint: $('exportOldHint'), exportNewHint: $('exportNewHint'),
   previewDoc: $('previewDoc'), previewOverlay: $('previewOverlay'), previewTitle: $('previewTitle'),
   previewBody: $('previewBody'), closePreviewSheet: $('closePreviewSheet'),
   removeDoc: $('removeDoc'), removeOverlay: $('removeOverlay'), removeWhat: $('removeWhat'),
   removeConfirm: $('removeConfirm'), removeError: $('removeError'),
   confirmRemove: $('confirmRemove'), cancelRemove: $('cancelRemove'),
   closeRemoveSheet: $('closeRemoveSheet'),
+  versionRemoveOverlay: $('versionRemoveOverlay'), versionRemoveWhat: $('versionRemoveWhat'),
+  versionRemoveConfirm: $('versionRemoveConfirm'), versionRemoveError: $('versionRemoveError'),
+  confirmVersionRemove: $('confirmVersionRemove'), cancelVersionRemove: $('cancelVersionRemove'),
+  closeVersionRemoveSheet: $('closeVersionRemoveSheet'),
 };
 
 const fmtTok = (n) => (n == null ? '—' : n.toLocaleString());
@@ -61,6 +68,53 @@ const fmtWhen = (iso) => {
 const escapeHtml = (s) => String(s).replace(/[&<>"']/g, (c) =>
   ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
+/* ------------------------------------------------------------- snackbars */
+
+let snackbarTimer = null;
+
+/**
+ * Show a transient toast at the bottom-center of the viewport.
+ *
+ * `action` — `{ label, onClick }` — turns the toast into the one place the user
+ * can act on what just happened ("Rewrite saved as v5" → "See the version").
+ * A toast carrying an action stays up longer, because it is now something to
+ * read *and* decide about rather than a notice to glance at.
+ */
+function showSnackbar(message, type = 'success', action = null) {
+  document.querySelectorAll('.snackbar').forEach((n) => n.remove());
+  clearTimeout(snackbarTimer);
+
+  const bar = document.createElement('div');
+  bar.className = `snackbar ${type}${action ? ' withAction' : ''}`;
+
+  const text = document.createElement('span');
+  text.className = 'snackText';
+  text.textContent = message;
+  bar.appendChild(text);
+
+  const dismiss = () => {
+    clearTimeout(snackbarTimer);
+    bar.classList.remove('show');
+    setTimeout(() => bar.remove(), 250);
+  };
+
+  if (action) {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'snackAction';
+    btn.textContent = action.label;
+    btn.addEventListener('click', () => { dismiss(); action.onClick(); });
+    bar.appendChild(btn);
+  }
+
+  document.body.appendChild(bar);
+
+  // Force a reflow so the enter transition plays.
+  requestAnimationFrame(() => bar.classList.add('show'));
+
+  snackbarTimer = setTimeout(dismiss, action ? 9000 : 3200);
+}
+
 /* ----------------------------------------------------------------- bootstrap */
 
 cfg = await api('/api/config');
@@ -75,13 +129,45 @@ const modelOptions = (selected) => (cfg.models.length ? cfg.models : [cfg.model]
 
 el.model.innerHTML = modelOptions(cfg.model);
 
-if (cfg.reachable) {
-  el.status.className = 'status ok';
-  el.status.textContent = new URL(cfg.baseUrl).host;
-} else {
+showProviderStatus();
+
+/**
+ * The status pill names the provider that will answer. With the main one down
+ * but a fallback reachable, it says so rather than reading as "nothing works" —
+ * the app is still usable in that state, which is the whole point of the chain.
+ */
+function showProviderStatus() {
+  if (cfg.reachable) {
+    el.status.className = 'status ok';
+    el.status.textContent = new URL(cfg.baseUrl).host
+      + (cfg.fallbacks?.length ? ` +${cfg.fallbacks.length}` : '')
+      + (cfg.providerSource === 'env' ? ' · .env' : '');
+    el.status.title = [
+      `main: ${cfg.provider?.label || cfg.baseUrl} · ${cfg.model}`,
+      ...(cfg.fallbacks || []).map((f, i) => `fallback ${i + 1}: ${f.label} · ${f.model || 'default model'}`),
+      cfg.providerSource === 'env' ? 'from .env — open ⚙ LLM to save providers in the database' : '',
+    ].filter(Boolean).join('\n');
+    return;
+  }
+
   el.status.className = 'status bad';
-  el.status.textContent = `unreachable — ${cfg.baseUrl}`;
+  el.status.textContent = cfg.providerSource === 'none'
+    ? 'no provider — open ⚙ LLM'
+    : cfg.fallbackReady
+      ? `main down — ${cfg.fallbackReady.label} answering`
+      : `unreachable — ${cfg.baseUrl}`;
+  el.status.title = cfg.error || '';
 }
+
+// The plugin fires this after the provider chain is saved. Everything the app
+// shows about models comes from /api/config, so it simply re-reads it.
+document.addEventListener('llm-settings:saved', async () => {
+  cfg = await api('/api/config');
+  el.model.innerHTML = modelOptions(cfg.model);
+  showProviderStatus();
+  el.stage.classList.remove('error');
+  el.stage.textContent = `LLM providers saved — ${cfg.provider?.label || cfg.baseUrl} is now the main provider`;
+});
 
 renderStats(cfg.stats);
 await refreshDocuments();
@@ -222,7 +308,7 @@ el.docVersions.addEventListener('click', () => {
   const doc = docCache.find((d) => String(d.id) === el.docPick.value);
   if (doc) openVersions(doc.id);
 });
-el.closeVersionsSheet.addEventListener('click', () => el.versionsOverlay.classList.add('hidden'));
+el.closeVersionsSheet.addEventListener('click', closeVersions);
 el.diffFrom.addEventListener('change', loadDiff);
 el.diffTo.addEventListener('change', loadDiff);
 document.querySelectorAll('input[name="diffMode"]').forEach((r) =>
@@ -235,13 +321,36 @@ let versionsCache = [];   // version rows for the open document
 let diffFromV = 0;        // currently compared versions, for the toolbar
 let diffToV = 1;
 
+const versionsOpen = () => !el.versionsOverlay.classList.contains('hidden');
+
 async function openVersions(documentId) {
   versionsDocId = documentId;
   el.versionsOverlay.classList.remove('hidden');
   el.diffView.innerHTML = '<div class="diffEmpty">loading…</div>';
   el.diffStat.textContent = '';
+  await loadVersions();
+}
 
-  const { filename, versions } = await api(`/api/documents/${documentId}/versions`);
+function closeVersions() {
+  el.versionsOverlay.classList.add('hidden');
+  setPreviewReturn(null);
+}
+
+/**
+ * (Re)build the history rail and the two pickers from the server's list.
+ *
+ * Called on open and again every time a version is filed or deleted while the
+ * modal stays open: the rail is the record of what just happened, so it has to
+ * show it without a close-and-reopen. `focus` decides where that leaves the
+ * comparison — 'newest' jumps to the change that just landed, 'keep' holds the
+ * pair the user was reading (falling back to the newest if it has gone).
+ */
+async function loadVersions({ focus = 'newest' } = {}) {
+  if (versionsDocId == null) return;
+
+  const held = { from: el.diffFrom.value, to: el.diffTo.value };
+
+  const { filename, versions } = await api(`/api/documents/${versionsDocId}/versions`);
   versionsCache = versions;
   el.versionsTitle.textContent = `Versions · ${filename}`;
 
@@ -251,12 +360,14 @@ async function openVersions(documentId) {
       <div class="v">v${v.version}${v.version === newest ? '<span class="tag">current</span>' : ''}</div>
       <div class="s">${versionStat(v)}</div>
       <div class="s">${v.pages ? `${v.pages}p · ` : ''}${(v.words ?? 0).toLocaleString()} words · ${fmtWhen(v.created_at)}</div>
+      <button class="versionTrash" title="Remove version v${v.version}" aria-label="Remove version v${v.version}" data-version="${v.version}">🗑</button>
     </div>`).join('');
 
   el.versionList.querySelectorAll('.versionRow').forEach((row) => {
     // Picking a version shows what that save changed — the diff against the
     // one before it, which is the question anyone clicking a history asks.
-    row.addEventListener('click', () => {
+    row.addEventListener('click', (e) => {
+      if (e.target.closest('.versionTrash')) return;
       const v = Number(row.dataset.version);
       el.diffTo.value = String(v);
       el.diffFrom.value = String(v - 1);
@@ -264,15 +375,71 @@ async function openVersions(documentId) {
     });
   });
 
+  el.versionList.querySelectorAll('.versionTrash').forEach((btn) => {
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      openVersionRemove(Number(btn.dataset.version));
+    });
+  });
+
   const label = (v) => `v${v.version} · ${fmtWhen(v.created_at)}`;
   const options = versions.map((v) => `<option value="${v.version}">${label(v)}</option>`).join('');
-  el.diffFrom.innerHTML = options + '<option value="0">nothing (original upload)</option>';
+  el.diffFrom.innerHTML = options + '<option value="0">nothing (before the first version)</option>';
   el.diffTo.innerHTML = options;
-  el.diffTo.value = String(newest);
-  el.diffFrom.value = String(newest - 1);
+
+  const has = (sel, value) => [...sel.options].some((o) => o.value === value);
+  const keep = focus === 'keep' && has(el.diffTo, held.to) && has(el.diffFrom, held.from);
+  el.diffTo.value = keep ? held.to : String(newest);
+  el.diffFrom.value = keep ? held.from : String(newest - 1);
 
   await loadDiff();
 }
+
+/**
+ * A version was just filed for `documentId`. If its history is on screen, the
+ * new entry belongs there now — the user filed it seconds ago and is looking
+ * straight at the list it is missing from.
+ */
+async function versionFiled(documentId) {
+  if (!versionsOpen() || versionsDocId !== documentId) return;
+  await loadVersions({ focus: 'newest' });
+}
+
+/* --------------------------------------------- preview ⇄ versions round trip */
+
+// Set while the versions modal was reached from an open preview, so the way
+// back is one click rather than close-reopen-scroll-to-where-I-was.
+let previewReturn = null;
+
+function setPreviewReturn(state) {
+  previewReturn = state;
+  el.backToPreview.classList.toggle('hidden', !state);
+}
+
+/** Leave the preview for the version that was just filed from it. */
+async function openVersionsFromPreview(documentId) {
+  // Both are full-screen overlays; the preview has to stand down or it paints
+  // over the diff it just sent the user to.
+  el.previewOverlay.classList.add('hidden');
+  setPreviewReturn({ docId: documentId });
+  await openVersions(documentId);
+}
+
+el.backToPreview.addEventListener('click', async () => {
+  const back = previewReturn;
+  setPreviewReturn(null);
+  el.versionsOverlay.classList.add('hidden');
+  if (!back) return;
+
+  // The preview still holds the text as the rewrite left it — including the
+  // patched passage — so restoring it beats re-fetching the stored document.
+  if (previewDocId === back.docId) {
+    el.previewOverlay.classList.remove('hidden');
+    return;
+  }
+  const doc = docCache.find((d) => d.id === back.docId);
+  if (doc) await openPreview(doc);
+});
 
 const versionStat = (v) => v.additions == null && v.deletions == null
   ? 'original upload'
@@ -297,26 +464,62 @@ async function loadDiff() {
   } catch (err) {
     el.diffStat.textContent = '';
     el.diffView.innerHTML = `<div class="diffEmpty">${escapeHtml(err.message)}</div>`;
+  } finally {
+    syncExportLabels();
   }
 }
 
 /* ------------------------------------------------------- version toolbar */
 
+/**
+ * Every export button names the version it produces and sits on the side of
+ * the bar whose column it belongs to — "⇩ DOCX" twice over is a coin toss, and
+ * a download is the wrong place to find out you guessed wrong.
+ */
+function syncExportLabels() {
+  const newest = versionsCache[0]?.version;
+  const split = (document.querySelector('input[name="diffMode"]:checked')?.value || 'split') === 'split';
+
+  const label = (v) => v === 0
+    ? 'nothing'
+    : `v${v}${v === newest ? ' · current' : ''}`;
+
+  el.exportOldLabel.textContent = label(diffFromV);
+  el.exportNewLabel.textContent = label(diffToV);
+  el.exportOldHint.textContent = split ? 'left column' : 'before';
+  el.exportNewHint.textContent = split ? 'right column' : 'after';
+
+  const wire = (btn, version, what) => {
+    // from = 0 is the state before the first version: an empty side, with
+    // nothing to copy or download. Say so rather than serve an empty file.
+    const empty = version === 0;
+    btn.disabled = empty;
+    btn.title = empty
+      ? 'Nothing to export — this side is the state before the first version'
+      : what(label(version));
+  };
+
+  wire(el.copyOldVersion, diffFromV, (v) => `Copy the full text of ${v} to the clipboard`);
+  wire(el.copyNewVersion, diffToV, (v) => `Copy the full text of ${v} to the clipboard`);
+  wire(el.dlOldPdf, diffFromV, (v) => `Print ${v} as a PDF`);
+  wire(el.dlNewPdf, diffToV, (v) => `Print ${v} as a PDF`);
+  wire(el.dlOldDocx, diffFromV, (v) => `Download ${v} as a Word document`);
+  wire(el.dlNewDocx, diffToV, (v) => `Download ${v} as a Word document`);
+  wire(el.dlOldRtf, diffFromV, (v) => `Download ${v} as RTF`);
+  wire(el.dlNewRtf, diffToV, (v) => `Download ${v} as RTF`);
+}
+
 /** The version text for the toolbar's copy/download buttons. */
 async function versionText(version) {
-  if (version === 0) {
-    // "nothing" — the state before the first upload, i.e. the original text.
-    const doc = docCache.find((d) => d.id === versionsDocId);
-    if (!doc) return '';
-    const { text } = await api(`/api/documents/${versionsDocId}/text`);
-    return text;
-  }
+  // Version 0 is "before the first version" — an empty document, which is how
+  // the diff renders it too. Its buttons are disabled; this is the backstop.
+  if (version === 0) return '';
   const res = await fetch(`/api/documents/${versionsDocId}/versions/${version}/text`);
   if (!res.ok) throw new Error((await res.json()).error || res.statusText);
   return res.text();
 }
 
-const versionLabel = (v) => v === 0 ? 'original' : `v${v}`;
+const versionLabel = (v) => v === 0 ? 'nothing' : `v${v}`;
 
 el.copyOldVersion.addEventListener('click', async () => {
   try {
@@ -378,7 +581,14 @@ el.previewDoc.addEventListener('click', () => {
   const doc = docCache.find((d) => String(d.id) === el.docPick.value);
   if (doc) openPreview(doc);
 });
-el.closePreviewSheet.addEventListener('click', () => el.previewOverlay.classList.add('hidden'));
+el.closePreviewSheet.addEventListener('click', () => {
+  el.previewOverlay.classList.add('hidden');
+  previewDocId = null;
+});
+
+// Which document the preview currently holds, so a return trip from the
+// versions modal can restore it instead of rebuilding it.
+let previewDocId = null;
 
 /**
  * Show the document's content in a modal. PDFs embed the stored bytes in an
@@ -386,6 +596,7 @@ el.closePreviewSheet.addEventListener('click', () => el.previewOverlay.classList
  * as a scrollable pre. The preview button is enabled whenever a doc is picked.
  */
 async function openPreview(doc) {
+  previewDocId = doc.id;
   el.previewOverlay.classList.remove('hidden');
   el.previewTitle.textContent = `Preview · ${doc.filename}`;
   el.previewBody.innerHTML = '<div class="diffEmpty">loading…</div>';
@@ -504,6 +715,9 @@ function hideRewritePopup() {
 /** Call the model, then splice the rewritten passage back into the document. */
 async function runRewrite(passage) {
   if (!rewritePopup || !rewriteTarget) return;
+  // hideRewritePopup() clears rewriteTarget below, so hold on to it here —
+  // everything after the splice needs to know which surface it came from.
+  const target = rewriteTarget;
   const instr = rewritePopup.querySelector('.rewriteInstr')?.value.trim() || '';
   const go = rewritePopup.querySelector('button.primary');
   go.disabled = true;
@@ -516,12 +730,12 @@ async function runRewrite(passage) {
       model: el.model.value,
     });
 
-    const { docId } = rewriteTarget;
+    const { docId } = target;
     let next;
 
-    if (rewriteTarget.kind === 'preview') {
+    if (target.kind === 'preview') {
       // Splice by DOM offset into the preview's raw text.
-      const root = rewriteTarget.root;
+      const root = target.root;
       const sel = window.getSelection();
       const range = sel?.getRangeAt(0);
       if (!root || !range) return;
@@ -540,13 +754,13 @@ async function runRewrite(passage) {
       // Version diff: the rendered table carries line numbers and marks, so
       // DOM offsets don't map to the raw text. Instead, replace the selected
       // passage string in the version's raw text and file a new version.
-      const raw = await versionText(rewriteTarget.version);
+      const raw = await versionText(target.version);
       // The diff renders a leading +/− mark and line numbers; strip any that
       // leaked into the selection so it matches the raw version text.
       const clean = passage.replace(/^[+−]\s*/, '').trim();
       const idx = raw.indexOf(clean);
       if (idx === -1) {
-        alert('Could not locate the selected passage in the version text.');
+        showSnackbar('Could not locate the selected passage in the version text.', 'error');
         return;
       }
       next = raw.slice(0, idx) + rewritten + raw.slice(idx + clean.length);
@@ -554,17 +768,32 @@ async function runRewrite(passage) {
     }
 
     // Persist as a new version so the change is reviewable in the diff.
+    let saved = null;
     if (docId != null) {
       try {
-        await jsonPost(`/api/documents/${docId}/versions`, { text: next });
+        saved = await jsonPost(`/api/documents/${docId}/versions`, { text: next });
         await refreshDocuments(docId);
         await refreshThreads();
-        // If we rewrote inside the versions modal, refresh the diff too.
-        if (rewriteTarget?.kind === 'version') await loadDiff();
+        // The rail is on screen for a diff rewrite, and may be behind the
+        // preview for the other kind — either way it now has an entry missing.
+        await versionFiled(docId);
       } catch { /* identical text — nothing to file */ }
     }
+
+    const filed = saved ? `Rewrite saved as v${saved.version}.` : 'Rewrite saved as a new version.';
+
+    // Rewriting from the preview leaves the change reviewable somewhere the
+    // user cannot see, so the toast carries the way there.
+    if (target.kind === 'preview' && saved && !versionsOpen()) {
+      showSnackbar(filed, 'success', {
+        label: 'See the version',
+        onClick: () => openVersionsFromPreview(docId),
+      });
+    } else {
+      showSnackbar(filed);
+    }
   } catch (err) {
-    alert(err.message);
+    showSnackbar(err.message, 'error');
   } finally {
     if (rewritePopup) {
       go.disabled = false;
@@ -663,6 +892,78 @@ el.confirmRemove.addEventListener('click', async () => {
   else await refreshThreads();
   renderStats((await api('/api/config')).stats);
   el.docMeta.textContent = `${name} removed from the library`;
+});
+
+/* --------------------------------------------------------- removing a version */
+
+let versionRemoveDocId = null;
+let versionRemoveNum = null;
+
+function openVersionRemove(version) {
+  if (versionsDocId == null) return;
+  const v = versionsCache.find((x) => x.version === version);
+  if (!v) return;
+
+  versionRemoveDocId = versionsDocId;
+  versionRemoveNum = version;
+
+  const isCurrent = version === versionsCache[0].version;
+  const rollback = isCurrent && versionsCache.length > 1
+    ? ` The document will roll back to v${versionsCache[1].version}.`
+    : '';
+
+  el.versionRemoveWhat.innerHTML =
+    `<strong>v${version}</strong> of <strong>${escapeHtml(el.versionsTitle.textContent.replace('Versions · ', ''))}</strong> will be deleted permanently.${rollback}`;
+
+  el.versionRemoveError.textContent = '';
+  el.versionRemoveConfirm.value = '';
+  el.confirmVersionRemove.disabled = true;
+  el.confirmVersionRemove.textContent = 'Remove version';
+  el.versionRemoveOverlay.classList.remove('hidden');
+  el.versionRemoveConfirm.focus();
+}
+
+const closeVersionRemove = () => {
+  el.versionRemoveOverlay.classList.add('hidden');
+  versionRemoveDocId = null;
+  versionRemoveNum = null;
+};
+
+el.closeVersionRemoveSheet.addEventListener('click', closeVersionRemove);
+el.cancelVersionRemove.addEventListener('click', closeVersionRemove);
+
+const versionRemoveArmed = () => el.versionRemoveConfirm.value.trim() === REMOVE_WORD;
+
+el.versionRemoveConfirm.addEventListener('input', () => {
+  el.confirmVersionRemove.disabled = !versionRemoveArmed();
+});
+el.versionRemoveConfirm.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter' && versionRemoveArmed()) el.confirmVersionRemove.click();
+});
+
+el.confirmVersionRemove.addEventListener('click', async () => {
+  if (versionRemoveDocId == null || versionRemoveNum == null || !versionRemoveArmed()) return;
+
+  const docId = versionRemoveDocId;
+  const version = versionRemoveNum;
+
+  el.versionRemoveError.textContent = '';
+  el.confirmVersionRemove.disabled = true;
+  el.confirmVersionRemove.textContent = 'Removing…';
+
+  try {
+    await api(`/api/documents/${docId}/versions/${version}`, { method: 'DELETE' });
+  } catch (err) {
+    el.versionRemoveError.textContent = err.message;
+    el.confirmVersionRemove.disabled = false;
+    el.confirmVersionRemove.textContent = 'Remove version';
+    return;
+  }
+
+  closeVersionRemove();
+  await openVersions(docId);
+  await refreshDocuments();
+  showSnackbar(`v${version} removed`);
 });
 
 /* ---------------------------------------------------------------- diff view */
@@ -1284,6 +1585,15 @@ async function streamTurn(url, payload) {
           scrollDown();
         } else if (type === 'stage') {
           el.stage.textContent = v;
+        } else if (type === 'fallback') {
+          // The main provider refused the call. The turn is still going, on
+          // another provider and usually another model — say so in the bubble,
+          // because the answer's label is about to change under the reader.
+          const line = document.createElement('div');
+          line.className = 'fallbackNote';
+          line.textContent = `⇢ ${v.failed} unavailable (${v.error}) — answering with ${v.next}${v.model ? ` · ${v.model}` : ''}`;
+          bubble.insertBefore(line, bubble.querySelector('.body'));
+          showSnackbar(`${v.failed} down — falling back to ${v.next}`, 'error');
         } else if (type === 'usage') {
           turnUsage.promptTokens += v.promptTokens ?? 0;
           turnUsage.completionTokens += v.completionTokens ?? 0;

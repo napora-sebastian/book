@@ -5,7 +5,15 @@
  */
 import 'dotenv/config';
 
+import { llmSettings } from '../server/llm-settings.js';
+
+// The app answers from the provider chain stored by the llm-settings plugin, so
+// the doctor probes those first — checking only .env would happily report a
+// healthy endpoint the app no longer uses.
+const CONFIGURED = llmSettings.resolve().providers.map((p) => p.apiUrl);
+
 const CANDIDATES = [
+  ...CONFIGURED,
   process.env.LLM_BASE_URL,
   'http://aitopatom-4fc6.local:11111/v1', // "head" node, LiteLLM proxy
   'http://aitopatom-4fc6.local:8890/v1',  // "head" node, vLLM direct (tp2)
@@ -15,8 +23,9 @@ const CANDIDATES = [
   'http://127.0.0.1:8890/v1',             // vLLM over SSH tunnel
 ].filter(Boolean).map((u) => u.replace(/\/+$/, ''));
 
-const KEY = process.env.LLM_API_KEY || 'local';
-const WANT = process.env.LLM_MODEL || '';
+const main = llmSettings.resolve().main;
+const KEY = main?.apiKey || process.env.LLM_API_KEY || 'local';
+const WANT = main?.model || process.env.LLM_MODEL || '';
 const headers = { authorization: `Bearer ${KEY}`, 'content-type': 'application/json' };
 
 const probe = async (base) => {
@@ -59,9 +68,9 @@ No endpoint answered. Checklist:
 console.log(`\nUsing ${hit.base}`);
 
 if (WANT && !hit.models.includes(WANT)) {
-  console.log(`\n⚠  LLM_MODEL is "${WANT}" but the server advertises:`);
+  console.log(`\n⚠  The configured model is "${WANT}" but the server advertises:`);
   hit.models.forEach((m) => console.log(`     ${m}`));
-  console.log('   Copy the exact id above into .env — ids must match verbatim.');
+  console.log('   Pick the exact id above in ⚙ LLM — ids must match verbatim.');
 }
 
 const model = hit.models.includes(WANT) ? WANT : hit.models[0];
@@ -92,7 +101,11 @@ const ctx = json.usage ? `prompt ${json.usage.prompt_tokens} / completion ${json
 if (ctx) console.log(`      usage: ${ctx}`);
 
 console.log(`
-Put these in .env:
+Set this as the main provider in the app's ⚙ LLM screen:
+  API URL   ${hit.base}
+  Model     ${model}
+
+(Or, before anything is saved there, as .env defaults:
   LLM_BASE_URL=${hit.base}
-  LLM_MODEL=${model}
+  LLM_MODEL=${model})
 `);

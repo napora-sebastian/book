@@ -27,7 +27,7 @@
         <button id="docVersions" class="small" disabled title="What changed between versions of this document">Versions</button>
       </div>
       <div class="row">
-        <button id="removeDoc" class="small destructive" disabled title="Delete this document and its whole version history — cannot be undone">Remove</button>
+        <button id="removeDoc" class="small removeBtn" disabled title="Delete this document and its whole version history — cannot be undone" aria-label="Remove document">🗑 Remove</button>
       </div>
       <div id="docMeta" class="docMeta"></div>
     </div>
@@ -44,13 +44,14 @@
         <span id="threadTitle" class="threadTitle">No thread open</span>
         <span id="threadDoc" class="threadDoc"></span>
       </div>
-      <div class="topActions">
+      <div class="topActions" id="topActions">
         <select id="model" title="ds4-non-thinking is fastest; ds4-high/max reason first"></select>
         <button id="savedResponses" class="small">Saved responses</button>
         <span id="threadUsage" class="usage"></span>
         <button id="traces" class="small">Traces</button>
         <button id="renameThread" class="small" disabled>Rename</button>
         <button id="deleteThread" class="small danger" disabled>Delete</button>
+        <span id="llmSettingsMount"></span>
         <span id="status" class="status">checking…</span>
       </div>
     </header>
@@ -118,14 +119,7 @@
         <strong id="versionsTitle">Versions</strong>
         <div class="sheetActions">
           <span id="diffStat" class="diffStat"></span>
-          <button id="copyOldVersion" class="small" title="Copy the original (left) text">⧉ Copy original</button>
-          <button id="copyNewVersion" class="small" title="Copy the changed (right) text">⧉ Copy changed</button>
-          <button id="dlOldPdf" class="small" title="Download the original as PDF">⇩ PDF</button>
-          <button id="dlNewPdf" class="small" title="Download the changed as PDF">⇩ PDF</button>
-          <button id="dlOldDocx" class="small" title="Download the original as Word">⇩ DOCX</button>
-          <button id="dlNewDocx" class="small" title="Download the changed as Word">⇩ DOCX</button>
-          <button id="dlOldRtf" class="small" title="Download the original as RTF">⇩ RTF</button>
-          <button id="dlNewRtf" class="small" title="Download the changed as RTF">⇩ RTF</button>
+          <button id="backToPreview" class="small hidden" title="Return to the document preview you came from">← Back to preview</button>
           <button id="closeVersionsSheet" class="small">Close</button>
         </div>
       </header>
@@ -142,6 +136,34 @@
               <label><input type="radio" name="diffMode" value="unified" /> Unified</label>
             </span>
           </div>
+
+          <!-- Exports sit over the column they export: the left group takes the
+               text on the left of the diff, the right group the text on the
+               right, and both name the version by number so no button is a
+               guess. Labels are filled in by loadDiff(). -->
+          <div class="exportBar">
+            <div class="exportSide old">
+              <span class="exportWho">
+                <strong id="exportOldLabel" class="exportVer">—</strong>
+                <span id="exportOldHint" class="sideHint"></span>
+              </span>
+              <button id="copyOldVersion" class="small">⧉ Copy</button>
+              <button id="dlOldPdf" class="small">⇩ PDF</button>
+              <button id="dlOldDocx" class="small">⇩ DOCX</button>
+              <button id="dlOldRtf" class="small">⇩ RTF</button>
+            </div>
+            <div class="exportSide new">
+              <button id="copyNewVersion" class="small">⧉ Copy</button>
+              <button id="dlNewPdf" class="small">⇩ PDF</button>
+              <button id="dlNewDocx" class="small">⇩ DOCX</button>
+              <button id="dlNewRtf" class="small">⇩ RTF</button>
+              <span class="exportWho">
+                <span id="exportNewHint" class="sideHint"></span>
+                <strong id="exportNewLabel" class="exportVer">—</strong>
+              </span>
+            </div>
+          </div>
+
           <div id="diffView" class="diffView"></div>
         </div>
       </div>
@@ -183,6 +205,36 @@
     </div>
   </div>
 
+  <div id="versionRemoveOverlay" class="overlay hidden">
+    <div class="sheet confirmSheet">
+      <header class="sheetTop">
+        <strong>Remove version</strong>
+        <div class="sheetActions">
+          <button id="closeVersionRemoveSheet" class="small">Close</button>
+        </div>
+      </header>
+      <div class="confirmBody">
+        <p class="confirmWarn">⚠ This cannot be undone.</p>
+        <p id="versionRemoveWhat" class="confirmWhat"></p>
+        <label class="confirmLbl" for="versionRemoveConfirm">To confirm, type <code>REMOVE</code> below</label>
+        <input id="versionRemoveConfirm" type="text" class="confirmInput" placeholder="REMOVE"
+               autocomplete="off" autocapitalize="off" spellcheck="false" />
+        <div id="versionRemoveError" class="confirmError"></div>
+        <div class="confirmActions">
+          <button id="confirmVersionRemove" class="destructive" disabled>Remove version</button>
+          <button id="cancelVersionRemove" class="small">Cancel</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- The llm-settings plugin: everything about providers, keys, models and the
+       fallback chain lives behind this one button. Removing these two lines (and
+       the mount in server/index.js) removes the feature whole. -->
+  <script type="module">
+    import { mountLlmSettings } from '/plugins/llm-settings/llm-settings.js';
+    mountLlmSettings({ mount: '#llmSettingsMount', label: '⚙ LLM' });
+  </script>
   <script src="/app.js" type="module"></script>
 </body>
 </html>

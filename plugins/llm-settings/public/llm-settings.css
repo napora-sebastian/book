@@ -1,0 +1,148 @@
+/**
+ * llm-settings — self-contained styling.
+ *
+ * Every colour reads a host variable with a dark fallback, so the screen takes
+ * on the host app's palette when it defines one (--panel, --line, --fg, …) and
+ * still looks deliberate in a plain page that defines nothing.
+ */
+
+.llmset-trigger {
+  padding: 4px 9px;
+  font: inherit;
+  font-size: 12px;
+  border-radius: 7px;
+  border: 1px solid var(--line, #262c37);
+  background: var(--panel, #161a21);
+  color: var(--fg, #e6e9ef);
+  cursor: pointer;
+}
+.llmset-trigger:hover { border-color: var(--accent, #76b900); }
+
+.llmset-overlay {
+  position: fixed; inset: 0; z-index: 60;
+  background: rgba(0, 0, 0, .55);
+  display: flex; align-items: center; justify-content: center;
+  padding: 24px;
+}
+.llmset-overlay.hidden { display: none; }
+
+.llmset-sheet {
+  width: min(720px, 100%); max-height: 88vh;
+  display: flex; flex-direction: column; min-height: 0;
+  background: var(--panel, #161a21);
+  color: var(--fg, #e6e9ef);
+  border: 1px solid var(--line, #262c37);
+  border-radius: var(--radius, 10px);
+  font: 14px/1.55 ui-sans-serif, -apple-system, "SF Pro Text", system-ui, sans-serif;
+  box-shadow: 0 18px 50px rgba(0, 0, 0, .4);
+}
+
+.llmset-head {
+  display: flex; align-items: center; gap: 10px;
+  padding: 11px 14px; border-bottom: 1px solid var(--line, #262c37);
+}
+.llmset-headActions { display: flex; gap: 7px; margin-left: auto; }
+
+.llmset-source {
+  font: 11px ui-monospace, SFMono-Regular, Menlo, monospace;
+  color: var(--dim, #8b93a3);
+}
+.llmset-source.db::before  { content: "● "; color: var(--accent, #76b900); }
+.llmset-source.env::before { content: "● "; color: #d29922; }
+.llmset-source.none::before { content: "● "; color: var(--err, #ff6b6b); }
+
+.llmset-body { overflow-y: auto; padding: 12px 14px 16px; min-height: 0; }
+.llmset-note { font-size: 12px; color: var(--dim, #8b93a3); margin-bottom: 12px; }
+.llmset-list { display: flex; flex-direction: column; gap: 10px; }
+.llmset-empty { font-size: 12.5px; color: var(--dim, #8b93a3); padding: 18px; text-align: center; }
+
+/* ------------------------------------------------------------------- cards */
+
+.llmset-card {
+  border: 1px solid var(--line, #262c37);
+  border-radius: 9px;
+  padding: 10px 11px 11px;
+  background: var(--bg, #0f1115);
+}
+/* The main provider carries every request until it fails — mark it as the one
+   that matters, so a mis-ordered chain is visible without reading the badges. */
+.llmset-card.main { border-color: var(--accent, #76b900); }
+/* Kept in the list, skipped by the chain — dimmed rather than hidden, so the
+   order it will resume in is still visible. */
+.llmset-card.off { opacity: .55; }
+
+.llmset-cardHead { display: flex; align-items: center; gap: 7px; margin-bottom: 9px; }
+.llmset-badge {
+  font: 10px ui-monospace, SFMono-Regular, Menlo, monospace;
+  letter-spacing: .6px;
+  padding: 2px 6px; border-radius: 5px;
+  border: 1px solid var(--line, #262c37);
+  color: var(--dim, #8b93a3);
+  white-space: nowrap;
+}
+.llmset-card.main .llmset-badge { color: var(--accent, #76b900); border-color: var(--accent, #76b900); }
+.llmset-label { flex: 1; }
+
+.llmset-field { display: block; margin-top: 8px; }
+.llmset-fieldLbl {
+  display: block; margin-bottom: 3px;
+  font-size: 11px; text-transform: uppercase; letter-spacing: .5px;
+  color: var(--dim, #8b93a3);
+}
+.llmset-hint { display: block; margin-top: 3px; font-size: 11px; color: var(--dim, #8b93a3); }
+
+.llmset-input {
+  width: 100%;
+  padding: 6px 8px;
+  border-radius: 7px;
+  border: 1px solid var(--line, #262c37);
+  background: var(--panel, #161a21);
+  color: var(--fg, #e6e9ef);
+  font: 12.5px ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+.llmset-input:focus { outline: none; border-color: var(--accent, #76b900); }
+
+.llmset-modelRow { display: flex; gap: 6px; align-items: center; }
+.llmset-modelRow .llmset-input { flex: 1; min-width: 0; }
+.llmset-modelRow button { white-space: nowrap; }
+
+.llmset-icon {
+  padding: 4px 7px; line-height: 1;
+  border-radius: 6px;
+  border: 1px solid var(--line, #262c37);
+  background: var(--panel, #161a21);
+  color: var(--dim, #8b93a3);
+  cursor: pointer;
+}
+.llmset-icon:hover:not(:disabled) { color: var(--fg, #e6e9ef); }
+.llmset-icon:disabled { opacity: .35; cursor: default; }
+.llmset-icon.danger:hover:not(:disabled) { color: var(--err, #ff6b6b); border-color: var(--err, #ff6b6b); }
+
+.llmset-probe {
+  margin-top: 8px; padding: 5px 8px; border-radius: 6px;
+  font: 11.5px ui-monospace, SFMono-Regular, Menlo, monospace;
+  word-break: break-word;
+}
+.llmset-probe.ok  { color: var(--addFg, #3fb950); border: 1px solid var(--addFg, #3fb950); }
+.llmset-probe.bad { color: var(--err, #ff6b6b); border: 1px solid var(--err, #ff6b6b); }
+
+.llmset-status {
+  margin-top: 12px;
+  font: 11.5px ui-monospace, SFMono-Regular, Menlo, monospace;
+  color: var(--dim, #8b93a3);
+  min-height: 16px;
+}
+.llmset-status.ok  { color: var(--addFg, #3fb950); }
+.llmset-status.bad { color: var(--err, #ff6b6b); }
+
+/* Buttons the plugin creates in a host that has no button styling of its own. */
+.llmset-sheet button.small {
+  padding: 4px 9px; font-size: 12px; border-radius: 7px;
+  border: 1px solid var(--line, #262c37);
+  background: var(--panel, #161a21);
+  color: var(--fg, #e6e9ef);
+  cursor: pointer;
+}
+.llmset-sheet button.small:hover:not(:disabled) { border-color: var(--accent, #76b900); }
+.llmset-sheet button.small:disabled { opacity: .5; cursor: default; }
+.llmset-sheet button.small.primary { border-color: var(--accent, #76b900); color: var(--accent, #76b900); }

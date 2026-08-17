@@ -326,13 +326,40 @@ the document fits.
 - The text pane is editable for a reason: deleting a 40-page appendix before
   running is the cheapest optimisation available.
 
+## Providers and fallbacks (⚙ LLM)
+
+Which endpoint answers is no longer a `.env` setting. The **⚙ LLM** button in the
+top bar opens the [llm-settings plugin](plugins/llm-settings/README.md): a main
+provider (API URL, key, and a model picked from what that server advertises),
+plus any number of fallback providers below it.
+
+If the main provider refuses a call — box down, connection refused, HTTP error —
+the next provider in the list answers instead, with **its own** model, and the
+turn says so in the transcript. Once tokens have started arriving no swap
+happens: a half-streamed answer cannot be replaced.
+
+The chain is stored in `data/threads.db` (table `llm_providers`), so it survives
+restarts and is backed up with everything else. Until something is saved there,
+the `LLM_*` values below are used exactly as before — the first save moves them
+into the database, key included, and `.env` is ignored from then on.
+
+```bash
+# The same thing without the UI:
+curl -X POST localhost:5173/api/llm/providers -H 'content-type: application/json' \
+  -d '{"llm_providers":[{"apiUrl":"http://192.168.0.80:11111/v1","apiKey":"local","model":"ds4-non-thinking"},
+                        {"apiUrl":"http://192.168.0.80:8890/v1","apiKey":"local","model":"deepseek-v4-flash-0731"}]}'
+curl localhost:5173/api/llm/providers        # list, keys masked
+curl localhost:5173/api/llm/providers/1      # one
+curl localhost:5173/api/llm/config           # the chain actually in use
+```
+
 ## Configuration (`.env`)
 
 | Key | Meaning |
 | --- | --- |
-| `LLM_BASE_URL` | OpenAI-compatible base, must end in `/v1` |
-| `LLM_MODEL` | Default model id; overridden by the UI picker |
-| `LLM_API_KEY` | Any non-empty string — LiteLLM accepts `local` |
+| `LLM_BASE_URL` | Default OpenAI-compatible base (must end in `/v1`) — used only until providers are saved in ⚙ LLM |
+| `LLM_MODEL` | Default model id; overridden by the saved provider and by the UI picker |
+| `LLM_API_KEY` | Default key — imported into the database on the first save |
 | `CONTEXT_BUDGET_CHARS` | Single-pass ceiling before map-reduce |
 | `CHUNK_CHARS` / `CHUNK_OVERLAP_CHARS` | Map-reduce chunking |
 | `TEMPERATURE` | Sampling |

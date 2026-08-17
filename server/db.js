@@ -337,6 +337,45 @@ export function getDocumentVersion(documentId, version) {
     .get(documentId, version) ?? null;
 }
 
+/**
+ * Remove one saved version of a document. The last remaining version cannot be
+ * removed — a document must always keep at least one. If the removed version is
+ * the newest (the one mirroring documents.text), the document rolls back to the
+ * previous version's content so the live text and the version rail stay in sync.
+ * Returns the removed version number, or null when the version does not exist.
+ */
+export function deleteDocumentVersion(documentId, version) {
+  const row = getDocumentVersion(documentId, version);
+  if (!row) return null;
+
+  const versions = listDocumentVersions(documentId);
+  if (versions.length <= 1) return null; // never remove the last version
+
+  inTransaction(() => {
+    db.prepare('DELETE FROM document_versions WHERE document_id = ? AND version = ?')
+      .run(documentId, version);
+
+    // If we removed the newest version, roll the live document back to the
+    // version that is now newest, so documents.text still mirrors the rail.
+    // listDocumentVersions omits the text column, so fetch the row with
+    // getDocumentVersion (SELECT *) to read the rollback text.
+    if (version === versions[0].version) {
+      const prev = getDocumentVersion(documentId, versions[1]?.version);
+      if (prev) {
+        db.prepare(
+          `UPDATE documents SET kind = ?, text = ?, chars = ?, words = ?, pages = ?, bytes = ?, sha256 = ?
+            WHERE id = ?`,
+        ).run(
+          prev.kind ?? null, prev.text, prev.text.length,
+          prev.words ?? null, prev.pages ?? null, prev.bytes ?? null, prev.sha256, documentId,
+        );
+      }
+    }
+  });
+
+  return version;
+}
+
 /** Library list for the "saved files" dropdown — excludes the text column. */
 export function listDocuments(limit = 200) {
   return db

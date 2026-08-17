@@ -18,6 +18,7 @@ import {
 } from './tasks.js';
 import * as llm from './llm.js';
 import * as db from './db.js';
+import { llmSettings } from './llm-settings.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
@@ -33,6 +34,12 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: MAX
 
 app.use(express.json({ limit: '64mb' }));
 app.use(express.static(path.join(__dirname, '..', 'public')));
+
+// The llm-settings plugin brings its own routes (/api/llm/*) and its own UI
+// assets (/plugins/llm-settings/*). It is the only thing that decides which
+// endpoint, key and model a request uses — this app never reads LLM_BASE_URL,
+// LLM_API_KEY or LLM_MODEL directly any more.
+llmSettings.mount(app);
 
 const asyncRoute = (fn) => (req, res, next) => Promise.resolve(fn(req, res, next)).catch(next);
 
@@ -72,7 +79,10 @@ function traceRow({ threadId, kind, task, model, result, messages, status, error
     task,
     model,
     servedModel: result?.servedModel,
-    baseUrl: llm.config().baseUrl,
+    // The provider that actually answered, which is not the main one when the
+    // chain fell back — a trace pointing at a box that refused the call would
+    // be worse than no endpoint at all.
+    baseUrl: result?.baseUrl ?? llm.config().baseUrl,
     fingerprint: result?.fingerprint,
     requestJson: JSON.stringify(compactMessages(messages)),
     requestParams: JSON.stringify({
@@ -121,10 +131,15 @@ function truncationError(finishReason, answer, model, cap) {
 /* ------------------------------------------------------------------- config */
 
 app.get('/api/config', asyncRoute(async (_req, res) => {
-  const { baseUrl, model } = llm.config();
+  const { baseUrl, model, source, provider, fallbacks } = llm.config();
   const out = {
     baseUrl,
     model,
+    // Where that came from, so the UI can say "using .env — nothing saved yet"
+    // and name the provider that will answer if the main one is down.
+    providerSource: source,
+    provider,
+    fallbacks,
     tasks: Object.entries(TASKS).map(([id, t]) => ({
       id,
       label: t.label,
@@ -143,6 +158,17 @@ app.get('/api/config', asyncRoute(async (_req, res) => {
     out.modelServed = out.models.includes(model);
   } catch (err) {
     out.error = err.message;
+
+    // The main provider is down, but the app is not: a turn sent now would be
+    // answered by the first fallback that responds. Say which one, and offer its
+    // models — an empty picker would suggest nothing works.
+    for (const fb of fallbacks) {
+      try {
+        out.models = await llmSettings.fetchModels(llmSettings.getSecret(fb.id) ?? fb);
+        out.fallbackReady = { label: fb.label, model: fb.model, apiUrl: fb.apiUrl };
+        break;
+      } catch { /* try the next one; the error already names the main provider */ }
+    }
   }
   res.json(out);
 }));
@@ -256,6 +282,23 @@ app.post('/api/documents/:id/versions', (req, res) => {
   if (!saved) return res.status(409).json({ error: 'This text is identical to the current version — nothing to save.' });
 
   res.json({ ...saved, filename: doc.filename });
+});
+
+/** Remove one saved version. The last remaining version is protected. */
+app.delete('/api/documents/:id/versions/:version', (req, res) => {
+  const id = Number(req.params.id);
+  const doc = db.getDocument(id);
+  if (!doc) return res.status(404).json({ error: 'No such document.' });
+
+  const version = Number(req.params.version);
+  const removed = db.deleteDocumentVersion(id, version);
+  if (removed == null) {
+    const exists = db.getDocumentVersion(id, version);
+    if (!exists) return res.status(404).json({ error: `No version ${version}.` });
+    return res.status(409).json({ error: 'A document must keep at least one version.' });
+  }
+
+  res.json({ deleted: removed });
 });
 
 /**
@@ -662,6 +705,20 @@ async function streamTurn(res, { threadId, userMsg, history, taskId, chosenModel
   let finishReason = null;
   let effectiveCap = Number(process.env.MAX_TOKENS ?? 4096);
 
+  // The model that ends up on the saved message is the one that answered, not
+  // the one that was asked for: a fallback provider serves its own model, and a
+  // bubble labelled with a model that never ran is a lie the traces disagree with.
+  let usedModel = chosenModel;
+  const fallbackNotices = [];
+  const onFallback = ({ failed, error, next }) => {
+    fallbackNotices.push(`${failed.label} failed (${error})`);
+    send('fallback', { failed: failed.label, error, next: next.label, model: next.model });
+    send('stage', `${failed.label} unavailable — falling back to ${next.label}`);
+  };
+  const noteProvider = (result) => {
+    if (result?.model) usedModel = result.model;
+  };
+
   try {
     if (docText.length <= CONTEXT_BUDGET) {
       const messages = buildThreadMessages({ docText, filename, history, question, taskId });
@@ -670,11 +727,12 @@ async function streamTurn(res, { threadId, userMsg, history, taskId, chosenModel
         : 'no document · plain chat');
 
       const result = await llm.stream(messages, {
-        model: chosenModel, onToken, onThinking, signal: abort.signal,
+        model: chosenModel, onToken, onThinking, signal: abort.signal, onFallback,
       });
       traceIds.push(trace(traceRow({
         threadId, kind: 'chat', task: taskId, model: chosenModel, result, messages,
       })));
+      noteProvider(result);
       finishReason = result.finishReason;
       effectiveCap = result.maxTokens ?? effectiveCap;
       send('usage', usagePayload(result));
@@ -690,10 +748,13 @@ async function streamTurn(res, { threadId, userMsg, history, taskId, chosenModel
         const messages = buildThreadMapMessages({
           chunk: chunks[i], question, filename, taskId, part: { i: i + 1, n: chunks.length },
         });
-        const result = await llm.complete(messages, { signal: abort.signal, model: chosenModel });
+        const result = await llm.complete(messages, {
+          signal: abort.signal, model: chosenModel, onFallback,
+        });
         traceIds.push(trace(traceRow({
           threadId, kind: 'map', task: taskId, model: chosenModel, result, messages,
         })));
+        noteProvider(result);
         send('usage', usagePayload(result));
 
         if (!/NOTHING RELEVANT IN THIS SECTION/i.test(result.text)) parts.push(result.text);
@@ -705,11 +766,12 @@ async function streamTurn(res, { threadId, userMsg, history, taskId, chosenModel
         send('stage', `merging ${parts.length} relevant sections`);
         const messages = buildThreadReduceMessages({ parts, question, history, filename, taskId });
         const result = await llm.stream(messages, {
-          model: chosenModel, onToken, onThinking, signal: abort.signal,
+          model: chosenModel, onToken, onThinking, signal: abort.signal, onFallback,
         });
         traceIds.push(trace(traceRow({
           threadId, kind: 'reduce', task: taskId, model: chosenModel, result, messages,
         })));
+        noteProvider(result);
         finishReason = result.finishReason;
         effectiveCap = result.maxTokens ?? effectiveCap;
         send('usage', usagePayload(result));
@@ -718,11 +780,17 @@ async function streamTurn(res, { threadId, userMsg, history, taskId, chosenModel
 
     const saved = db.addMessage({
       threadId, role: 'assistant', content: answer, reasoning: reasoning || null,
-      model: chosenModel, task: taskId, ms: Date.now() - started,
-      error: truncationError(finishReason, answer, chosenModel, effectiveCap),
+      model: usedModel, task: taskId, ms: Date.now() - started,
+      error: truncationError(finishReason, answer, usedModel, effectiveCap),
     });
     db.linkTracesToMessage(traceIds.filter(Boolean), saved.id);
-    send('done', { ...saved, usage: db.threadUsage(threadId) });
+    send('done', {
+      ...saved,
+      usage: db.threadUsage(threadId),
+      // Empty on the normal path. Non-empty means the main provider was down and
+      // something else answered — the UI says so instead of quietly swapping models.
+      fallbacks: fallbackNotices,
+    });
   } catch (err) {
     const aborted = abort.signal.aborted;
     trace({
@@ -737,7 +805,7 @@ async function streamTurn(res, { threadId, userMsg, history, taskId, chosenModel
     if (answer || !aborted) {
       const saved = db.addMessage({
         threadId, role: 'assistant', content: answer, reasoning: reasoning || null,
-        model: chosenModel, task: taskId, ms: Date.now() - started,
+        model: usedModel, task: taskId, ms: Date.now() - started,
         error: aborted ? 'stopped by user' : err.message,
       });
       db.linkTracesToMessage(traceIds.filter(Boolean), saved.id);
@@ -914,11 +982,14 @@ app.use((err, _req, res, _next) => {
 });
 
 app.listen(PORT, () => {
-  const { baseUrl, model } = llm.config();
+  const { baseUrl, model, source, fallbacks } = llm.config();
   const s = db.stats();
   console.log(`\n  spark-doc-lab  →  http://localhost:${PORT}`);
-  console.log(`  inference      →  ${baseUrl}`);
+  console.log(`  inference      →  ${baseUrl}  (${source === 'db' ? 'from LLM settings' : 'from .env — not saved yet'})`);
   console.log(`  model          →  ${model}`);
+  if (fallbacks.length) {
+    console.log(`  fallbacks      →  ${fallbacks.map((f) => `${f.label} (${f.model || 'default model'})`).join(' → ')}`);
+  }
   console.log(`  store          →  ${s.path}`);
   console.log(`                    ${s.documents} documents · ${s.threads} threads · ${s.messages} messages\n`);
 });
