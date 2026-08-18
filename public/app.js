@@ -30,6 +30,11 @@ const el = {
   removeConfirm: $('removeConfirm'), removeError: $('removeError'),
   confirmRemove: $('confirmRemove'), cancelRemove: $('cancelRemove'),
   closeRemoveSheet: $('closeRemoveSheet'),
+  promptOverlay: $('promptOverlay'), promptTitle: $('promptTitle'), promptLbl: $('promptLbl'),
+  promptInput: $('promptInput'), confirmPrompt: $('confirmPrompt'), cancelPrompt: $('cancelPrompt'),
+  closePromptSheet: $('closePromptSheet'),
+  askOverlay: $('askOverlay'), askTitle: $('askTitle'), askWhat: $('askWhat'),
+  confirmAsk: $('confirmAsk'), cancelAsk: $('cancelAsk'), closeAskSheet: $('closeAskSheet'),
   versionRemoveOverlay: $('versionRemoveOverlay'), versionRemoveWhat: $('versionRemoveWhat'),
   versionRemoveConfirm: $('versionRemoveConfirm'), versionRemoveError: $('versionRemoveError'),
   confirmVersionRemove: $('confirmVersionRemove'), cancelVersionRemove: $('cancelVersionRemove'),
@@ -115,6 +120,74 @@ function showSnackbar(message, type = 'success', action = null) {
   snackbarTimer = setTimeout(dismiss, action ? 9000 : 3200);
 }
 
+/* --------------------------------------------------------------- ask dialogs */
+
+/**
+ * Styled stands-in for prompt() and confirm(). A browser dialog is the one
+ * surface no stylesheet can reach — it arrives in the OS's font, ignores the
+ * app's colours, and blocks the page while it sits there.
+ *
+ * Both follow the app's modal convention: they close through their own buttons
+ * only, never on Esc or a backdrop click.
+ */
+function askText({ title, label, value = '', confirmLabel = 'Save' }) {
+  return new Promise((resolve) => {
+    el.promptTitle.textContent = title;
+    el.promptLbl.textContent = label;
+    el.confirmPrompt.textContent = confirmLabel;
+    el.promptInput.value = value;
+    el.confirmPrompt.disabled = !value.trim();
+    el.promptOverlay.classList.remove('hidden');
+    el.promptInput.focus();
+    el.promptInput.select();
+
+    const done = (result) => {
+      el.promptOverlay.classList.add('hidden');
+      el.confirmPrompt.removeEventListener('click', ok);
+      el.cancelPrompt.removeEventListener('click', no);
+      el.closePromptSheet.removeEventListener('click', no);
+      el.promptInput.removeEventListener('keydown', key);
+      el.promptInput.removeEventListener('input', typed);
+      resolve(result);
+    };
+    const ok = () => { const v = el.promptInput.value.trim(); if (v) done(v); };
+    const no = () => done(null);
+    const key = (e) => { if (e.key === 'Enter') { e.preventDefault(); ok(); } };
+    const typed = () => { el.confirmPrompt.disabled = !el.promptInput.value.trim(); };
+
+    el.confirmPrompt.addEventListener('click', ok);
+    el.cancelPrompt.addEventListener('click', no);
+    el.closePromptSheet.addEventListener('click', no);
+    el.promptInput.addEventListener('keydown', key);
+    el.promptInput.addEventListener('input', typed);
+  });
+}
+
+function askConfirm({ title, body, confirmLabel = 'Delete', destructive = true }) {
+  return new Promise((resolve) => {
+    el.askTitle.textContent = title;
+    el.askWhat.textContent = body;
+    el.confirmAsk.textContent = confirmLabel;
+    el.confirmAsk.className = destructive ? 'destructive' : 'primary';
+    el.askOverlay.classList.remove('hidden');
+    el.confirmAsk.focus();
+
+    const done = (result) => {
+      el.askOverlay.classList.add('hidden');
+      el.confirmAsk.removeEventListener('click', ok);
+      el.cancelAsk.removeEventListener('click', no);
+      el.closeAskSheet.removeEventListener('click', no);
+      resolve(result);
+    };
+    const ok = () => done(true);
+    const no = () => done(false);
+
+    el.confirmAsk.addEventListener('click', ok);
+    el.cancelAsk.addEventListener('click', no);
+    el.closeAskSheet.addEventListener('click', no);
+  });
+}
+
 /* ----------------------------------------------------------------- bootstrap */
 
 cfg = await api('/api/config');
@@ -172,6 +245,10 @@ document.addEventListener('llm-settings:saved', async () => {
 renderStats(cfg.stats);
 await refreshDocuments();
 await refreshThreads();
+
+// Deep link from the Grimoire view: /#thread=12 opens that conversation here.
+const deepLink = /^#thread=(\d+)$/.exec(location.hash);
+if (deepLink) await openThread(Number(deepLink[1])).catch(() => { location.hash = ''; });
 
 /* ----------------------------------------------------------------- documents */
 
@@ -236,12 +313,21 @@ el.renameDoc.addEventListener('click', async () => {
   const doc = docCache.find((d) => String(d.id) === el.docPick.value);
   if (!doc) return;
 
-  const filename = prompt('Document name:', doc.filename);
-  if (!filename?.trim()) return;
+  const filename = await askText({
+    title: 'Rename document',
+    label: 'Document name',
+    value: doc.filename,
+    confirmLabel: 'Rename',
+  });
+  if (!filename) return;
 
-  await jsonPost(`/api/documents/${doc.id}`, { filename: filename.trim() }, 'PATCH');
-  await refreshDocuments(doc.id);
-  await refreshThreads();
+  try {
+    await jsonPost(`/api/documents/${doc.id}`, { filename }, 'PATCH');
+    await refreshDocuments(doc.id);
+    await refreshThreads();
+  } catch (err) {
+    showSnackbar(err.message, 'error');
+  }
 });
 
 el.upload.addEventListener('click', () => el.file.click());
@@ -525,13 +611,13 @@ el.copyOldVersion.addEventListener('click', async () => {
   try {
     await copyText(await versionText(diffFromV));
     flashBtn(el.copyOldVersion, '✓ Copied');
-  } catch (err) { alert(err.message); }
+  } catch (err) { showSnackbar(err.message, 'error'); }
 });
 el.copyNewVersion.addEventListener('click', async () => {
   try {
     await copyText(await versionText(diffToV));
     flashBtn(el.copyNewVersion, '✓ Copied');
-  } catch (err) { alert(err.message); }
+  } catch (err) { showSnackbar(err.message, 'error'); }
 });
 
 const flashBtn = (btn, text) => {
@@ -559,7 +645,7 @@ async function downloadVersionPdf(version) {
     win.document.close();
     win.focus();
     win.print();
-  } catch (err) { alert(err.message); }
+  } catch (err) { showSnackbar(err.message, 'error'); }
 }
 
 const dlVersion = (version, ext) => {
@@ -1125,15 +1211,30 @@ async function openThread(id) {
 }
 
 el.renameThread.addEventListener('click', async () => {
-  const title = prompt('Thread title:', el.threadTitle.textContent);
-  if (!title?.trim()) return;
-  await jsonPost(`/api/threads/${currentThreadId}`, { title: title.trim() }, 'PATCH');
-  el.threadTitle.textContent = title.trim();
-  await refreshThreads();
+  const title = await askText({
+    title: 'Rename thread',
+    label: 'Thread title',
+    value: el.threadTitle.textContent,
+    confirmLabel: 'Rename',
+  });
+  if (!title) return;
+
+  try {
+    await jsonPost(`/api/threads/${currentThreadId}`, { title }, 'PATCH');
+    el.threadTitle.textContent = title;
+    await refreshThreads();
+  } catch (err) {
+    showSnackbar(err.message, 'error');
+  }
 });
 
 el.deleteThread.addEventListener('click', async () => {
-  if (!confirm('Delete this thread and all its messages?')) return;
+  const ok = await askConfirm({
+    title: 'Delete thread',
+    body: `"${el.threadTitle.textContent}" and all of its messages will be deleted. The document itself is not touched.`,
+    confirmLabel: 'Delete thread',
+  });
+  if (!ok) return;
   await api(`/api/threads/${currentThreadId}`, { method: 'DELETE' });
   currentThreadId = null;
   el.threadTitle.textContent = 'No thread open';
@@ -1326,7 +1427,7 @@ async function saveAsVersion(m, btn) {
   } catch (err) {
     btn.textContent = '⤓ Save as version';
     btn.disabled = false;
-    alert(err.message);
+    showSnackbar(err.message, 'error');
   }
 }
 

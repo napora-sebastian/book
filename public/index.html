@@ -9,7 +9,7 @@
 </head>
 <body>
   <aside class="sidebar">
-    <div class="brand">⚡ Spark Doc Lab</div>
+    <div class="brand"><span class="brandMark">⚡</span> Spark Doc Lab</div>
 
     <div class="newThread">
       <label class="lbl" for="docPick">Document</label>
@@ -17,17 +17,17 @@
       <input id="file" type="file" accept=".pdf,.docx,.rtf,.txt,.md,.csv" hidden />
       <input id="replaceFile" type="file" accept=".pdf,.docx,.rtf,.txt,.md,.csv" hidden />
       <div class="row">
-        <button id="upload" class="small">Upload file…</button>
+        <button id="upload" class="small" title="Add a document to the library">Upload</button>
         <button id="renameDoc" class="small" disabled>Rename</button>
         <button id="newThread" class="small primary">New thread</button>
       </div>
       <div class="row">
-        <button id="previewDoc" class="small" disabled>Preview</button>
-        <button id="replaceDoc" class="small" disabled title="Upload a new copy of this document — the old text is kept as a version">Replace…</button>
+        <button id="previewDoc" class="small" disabled title="Read this document — Ctrl+select a passage to have it rewritten">Preview</button>
+        <button id="replaceDoc" class="small" disabled title="Upload a new copy of this document — the old text is kept as a version">Replace</button>
         <button id="docVersions" class="small" disabled title="What changed between versions of this document">Versions</button>
       </div>
       <div class="row">
-        <button id="removeDoc" class="small removeBtn" disabled title="Delete this document and its whole version history — cannot be undone" aria-label="Remove document">🗑 Remove</button>
+        <button id="removeDoc" class="small removeBtn" disabled title="Delete this document and its whole version history — cannot be undone" aria-label="Remove document">Remove document</button>
       </div>
       <div id="docMeta" class="docMeta"></div>
     </div>
@@ -49,6 +49,7 @@
         <button id="savedResponses" class="small">Saved responses</button>
         <span id="threadUsage" class="usage"></span>
         <button id="traces" class="small">Traces</button>
+        <a href="/grimoire" class="small linkBtn" title="Browse every conversation as a gallery, and ask the Oracle about them">✦ Grimoire</a>
         <button id="renameThread" class="small" disabled>Rename</button>
         <button id="deleteThread" class="small danger" disabled>Delete</button>
         <span id="llmSettingsMount"></span>
@@ -66,12 +67,14 @@
 
     <div id="stage" class="stage"></div>
 
-    <form id="composer" class="composer">
-      <select id="task" title="Prefix your message with a preset instruction"></select>
-      <textarea id="input" rows="1" placeholder="Ask about the document…  (Enter to send, Shift+Enter for newline)"></textarea>
-      <button id="send" type="submit" class="primary" disabled>Send</button>
-      <button id="stop" type="button" class="hidden">Stop</button>
-    </form>
+    <div class="composerWrap">
+      <form id="composer" class="composer">
+        <select id="task" title="Prefix your message with a preset instruction"></select>
+        <textarea id="input" rows="1" placeholder="Ask about the document…  (Enter to send, Shift+Enter for newline)"></textarea>
+        <button id="send" type="submit" class="primary" disabled>Send</button>
+        <button id="stop" type="button" class="hidden">Stop</button>
+      </form>
+    </div>
   </main>
 
   <div id="overlay" class="overlay hidden">
@@ -198,8 +201,47 @@
                autocomplete="off" autocapitalize="off" spellcheck="false" />
         <div id="removeError" class="confirmError"></div>
         <div class="confirmActions">
+          <button id="cancelRemove">Cancel</button>
           <button id="confirmRemove" class="destructive" disabled>Remove document</button>
-          <button id="cancelRemove" class="small">Cancel</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Two reusable dialogs stand in for prompt() and confirm(): an OS dialog in
+       the middle of the app is the one surface no stylesheet can reach. -->
+  <div id="promptOverlay" class="overlay hidden">
+    <div class="sheet confirmSheet">
+      <header class="sheetTop">
+        <strong id="promptTitle">Rename</strong>
+        <div class="sheetActions">
+          <button id="closePromptSheet" class="small">Close</button>
+        </div>
+      </header>
+      <div class="confirmBody">
+        <label id="promptLbl" class="confirmLbl" for="promptInput">Name</label>
+        <input id="promptInput" type="text" class="promptInput" autocomplete="off" spellcheck="false" />
+        <div class="confirmActions">
+          <button id="cancelPrompt">Cancel</button>
+          <button id="confirmPrompt" class="primary">Save</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div id="askOverlay" class="overlay hidden">
+    <div class="sheet confirmSheet">
+      <header class="sheetTop">
+        <strong id="askTitle">Are you sure?</strong>
+        <div class="sheetActions">
+          <button id="closeAskSheet" class="small">Close</button>
+        </div>
+      </header>
+      <div class="confirmBody">
+        <p id="askWhat" class="confirmWhat"></p>
+        <div class="confirmActions">
+          <button id="cancelAsk">Cancel</button>
+          <button id="confirmAsk" class="destructive">Delete</button>
         </div>
       </div>
     </div>
@@ -221,8 +263,8 @@
                autocomplete="off" autocapitalize="off" spellcheck="false" />
         <div id="versionRemoveError" class="confirmError"></div>
         <div class="confirmActions">
+          <button id="cancelVersionRemove">Cancel</button>
           <button id="confirmVersionRemove" class="destructive" disabled>Remove version</button>
-          <button id="cancelVersionRemove" class="small">Cancel</button>
         </div>
       </div>
     </div>

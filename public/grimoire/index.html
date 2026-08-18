@@ -1,0 +1,149 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Archive Deck — Spark Doc Lab</title>
+<link rel="stylesheet" href="/grimoire/grimoire.css" />
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><text y='14' font-size='14'>◈</text></svg>" />
+</head>
+<body class="oracleOpen">
+
+<!-- Everything in here is inert: a grid floor, a scan sweep, scanlines. The
+     windows float in front of it and are never inside it. -->
+<div class="void" aria-hidden="true">
+  <div class="grid3d"></div>
+  <div class="horizon"></div>
+  <div class="sweep"></div>
+  <div class="scanlines"></div>
+  <div class="vignette"></div>
+</div>
+
+<!-- The frame the whole console sits in — four corner brackets, drawn once. -->
+<div class="frame" aria-hidden="true"></div>
+
+<header class="bar">
+  <a class="back" href="/" title="The old two-column view. Nothing on the deck needs it any more.">◀ LAB</a>
+
+  <div class="ident">
+    <span class="identName">ARCHIVE DECK</span>
+    <span class="identSub" id="ident">— · —</span>
+  </div>
+
+  <div class="seek">
+    <span class="seekRune">⌕</span>
+    <input id="q" type="search" placeholder="QUERY ARCHIVE…   [ / ]"
+           autocomplete="off" spellcheck="false" aria-label="Search the archive" />
+    <button id="clearQ" class="ghostBtn hidden" title="Clear query">✕</button>
+  </div>
+
+  <div class="barRight">
+    <button id="upload" class="hudBtn" title="Add a document and open a record for it">+ UPLOAD</button>
+    <button id="newRec" class="hudBtn" title="Open a new record on a document already in the library">⊞ RECORD</button>
+    <button id="savedBtn" class="hudBtn" title="Responses kept for reuse across records">★ SAVED</button>
+    <button id="linkBtn" class="hudBtn" title="Providers, keys, models and the fallback chain">⚙ LINK</button>
+    <button id="modeToggle" class="hudBtn" title="Deck / index (I)">◫ INDEX</button>
+    <button id="oracleToggle" class="hudBtn" aria-expanded="true">◈ ORACLE</button>
+  </div>
+</header>
+
+<!-- The deck: one window in front, every other one receding behind it, all of
+     them see-through. Selecting moves the stack, it does not open a dialog. -->
+<main class="stage">
+  <div id="deck" class="deck" role="listbox" aria-label="Conversations"></div>
+  <div id="index" class="index hidden" aria-label="Conversation index"></div>
+  <p id="void" class="voidNote hidden"></p>
+</main>
+
+<!-- Depth readout: which window you are on, and how deep the stack goes. -->
+<nav class="rail" id="rail" aria-hidden="true"></nav>
+
+<!-- Console readout: what the archive holds and what is answering. -->
+<div class="readout" id="readout" aria-hidden="true"></div>
+
+<div class="deckHint" id="hint">◀ ▶ TRAVERSE · ↑ ↓ SCROLL RECORD · TAB INDEX</div>
+
+<aside id="oracle" class="oracle" aria-label="Oracle">
+  <header class="oracleTop">
+    <span class="oracleMark">◈</span>
+    <div>
+      <h2>ORACLE</h2>
+      <p class="oracleSub">semantic retrieval over the archive</p>
+    </div>
+    <select id="oracleModel" class="hudSelect" title="Model that searches and answers"></select>
+    <button id="collapseOracle" class="ghostBtn" title="Stow">–</button>
+  </header>
+
+  <div id="oracleLog" class="oracleLog">
+    <div class="oracleIntro">
+      <p>QUERY THE ARCHIVE IN PLAIN LANGUAGE. THE ORACLE SEARCHES EVERY RECORD,
+         OPENS THE ONES THAT MATCH, AND ANSWERS FROM THEM.</p>
+      <div class="seeds">
+        <button class="seed">What did we decide about the first chapter?</button>
+        <button class="seed">Which conversations changed the manuscript?</button>
+        <button class="seed">Where did a turn fail, and why?</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="oracleStage" class="oracleStage"></div>
+
+  <form id="oracleForm" class="oracleForm">
+    <textarea id="oracleInput" rows="1" placeholder="QUERY…  [ENTER]"></textarea>
+    <button id="oracleSend" type="submit" class="hudBtn primary">RUN</button>
+    <button id="oracleStop" type="button" class="ghostBtn hidden">HALT</button>
+  </form>
+</aside>
+
+<button id="showOracle" class="oracleTab hidden" title="Deploy the Oracle">◈</button>
+
+<!-- Snackbars: anything that happens without a visible result reports here. -->
+<div id="snacks" class="snacks" aria-live="polite"></div>
+
+<input id="uploadFile" type="file" accept=".pdf,.docx,.rtf,.txt,.md,.csv" hidden />
+<input id="replaceFile" type="file" accept=".pdf,.docx,.rtf,.txt,.md,.csv" hidden />
+
+<!-- Ctrl/⌘ + select inside a document raises this: mark a passage, say what to
+     do with it, and the rewrite is filed as a reviewable new version. -->
+<div id="rewritePop" class="rewritePop hidden">
+  <span class="rewriteMark">◈ REWRITE</span>
+  <input id="rewriteInstr" class="rewriteInstr" placeholder="instruction (optional)…"
+         autocomplete="off" spellcheck="false" />
+  <button id="rewriteGo" class="hudBtn primary">RUN</button>
+  <button id="rewriteCancel" class="ghostBtn">✕</button>
+</div>
+
+<!-- The wide panel: saved responses, the document picker, ground-truth findings.
+     Anything that is a list rather than a question comes up here. -->
+<div id="sheet" class="modal hidden" role="dialog" aria-modal="true">
+  <div class="modalBox sheetBox">
+    <header class="modalTop">
+      <span id="sheetTitle">—</span>
+      <button id="sheetClose" class="ghostBtn">✕</button>
+    </header>
+    <div id="sheetBody" class="sheetBody"></div>
+    <footer id="sheetActs" class="modalActs"></footer>
+  </div>
+</div>
+
+<!-- One dialog serves every prompt and every confirmation. Destructive ones
+     make you type the word, the same gate the lab uses. -->
+<div id="modal" class="modal hidden" role="dialog" aria-modal="true">
+  <div class="modalBox">
+    <header class="modalTop"><span id="modalTitle">—</span></header>
+    <div class="modalBody">
+      <p id="modalWhat" class="modalWhat"></p>
+      <label id="modalLabel" class="modalLabel" for="modalInput"></label>
+      <input id="modalInput" class="modalInput" autocomplete="off" spellcheck="false" />
+      <p id="modalErr" class="modalErr"></p>
+    </div>
+    <footer class="modalActs">
+      <button id="modalCancel" class="hudBtn">CANCEL</button>
+      <button id="modalOk" class="hudBtn primary">CONFIRM</button>
+    </footer>
+  </div>
+</div>
+
+<script src="/grimoire/grimoire.js" type="module"></script>
+</body>
+</html>

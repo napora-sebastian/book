@@ -1,0 +1,987 @@
+/* ===========================================================================
+   Archive Deck — the archive as a stack of windows seen in depth.
+
+   The rule that produces the whole look: nothing is opaque, and nothing is
+   ever alone on screen. Every window is see-through enough that the windows
+   behind it stay readable, and the stack recedes on the Z axis instead of
+   scrolling — so what you are looking at always has the rest of the archive
+   standing behind it. Blur is kept deliberately low for the same reason: a
+   heavy backdrop-filter would turn the windows behind into milk, which is the
+   opposite of the effect.
+   =========================================================================== */
+
+:root {
+  color-scheme: dark;
+
+  --void:      #01060c;
+  --voidLift:  #04121d;
+
+  /* Two signals, and they never swap jobs: cyan is the system, amber is you. */
+  --cyan:      #6fe6ff;
+  --cyanDim:   #2b7f96;
+  --cyanGlow:  rgba(111, 230, 255, .30);
+  --amber:     #ffb454;
+  --amberGlow: rgba(255, 180, 84, .28);
+  --alert:     #ff6b5a;
+
+  --fg:      #d7f2fb;
+  --fgSoft:  #8fb6c6;
+  --dim:     #4e7286;
+
+  /* Window glass. Low alpha and low blur — the stack must show through. */
+  --pane:      rgba(8, 30, 44, .34);
+  --paneLift:  rgba(16, 52, 72, .30);
+  --edge:      rgba(111, 230, 255, .34);
+  --edgeSoft:  rgba(111, 230, 255, .16);
+
+  --s1: 4px; --s2: 8px; --s3: 12px; --s4: 16px; --s5: 22px; --s6: 30px;
+
+  --mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, "Roboto Mono", monospace;
+  --sans: ui-sans-serif, -apple-system, "SF Pro Text", system-ui, sans-serif;
+}
+
+* { box-sizing: border-box; }
+html, body { height: 100%; }
+
+body {
+  margin: 0;
+  font-family: var(--sans);
+  color: var(--fg);
+  background: var(--void);
+  overflow: hidden;
+  -webkit-font-smoothing: antialiased;
+}
+
+.hidden { display: none !important; }
+
+/* ------------------------------------------------------------------- void */
+
+.void { position: fixed; inset: 0; z-index: 0; overflow: hidden; pointer-events: none; }
+
+.void::before {
+  content: "";
+  position: absolute; inset: 0;
+  background:
+    radial-gradient(90% 70% at 50% 8%, #06283c 0%, transparent 60%),
+    radial-gradient(70% 60% at 12% 92%, #06202f 0%, transparent 65%),
+    linear-gradient(180deg, var(--voidLift), var(--void) 70%);
+}
+
+/* The floor grid, laid flat by perspective — the one element that tells the
+   eye which way "into the screen" points before any window has moved. */
+.grid3d {
+  position: absolute;
+  left: -50%; right: -50%; bottom: -10vh; height: 78vh;
+  background-image:
+    linear-gradient(rgba(111, 230, 255, .16) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(111, 230, 255, .16) 1px, transparent 1px);
+  background-size: 68px 68px;
+  transform: perspective(520px) rotateX(66deg);
+  transform-origin: 50% 100%;
+  mask-image: linear-gradient(180deg, transparent 0%, #000 42%, #000 78%, transparent 100%);
+  -webkit-mask-image: linear-gradient(180deg, transparent 0%, #000 42%, #000 78%, transparent 100%);
+  animation: floorRun 14s linear infinite;
+  opacity: .5;
+}
+@keyframes floorRun { from { background-position: 0 0; } to { background-position: 0 68px; } }
+
+.horizon {
+  position: absolute; left: 0; right: 0; top: 46%;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, rgba(111, 230, 255, .35) 30%, rgba(111, 230, 255, .35) 70%, transparent);
+  box-shadow: 0 0 26px var(--cyanGlow);
+  opacity: .5;
+}
+
+/* One slow pass of light down the console, the way a scanning display idles. */
+.sweep {
+  position: absolute; left: 0; right: 0; height: 34vh;
+  background: linear-gradient(180deg, transparent, rgba(111, 230, 255, .05) 45%, transparent);
+  animation: sweep 11s linear infinite;
+}
+@keyframes sweep { from { transform: translateY(-40vh); } to { transform: translateY(110vh); } }
+
+.scanlines {
+  position: absolute; inset: 0;
+  background: repeating-linear-gradient(180deg, rgba(0, 0, 0, .22) 0 1px, transparent 1px 3px);
+  opacity: .5;
+}
+
+.vignette {
+  position: absolute; inset: 0;
+  background: radial-gradient(115% 85% at 50% 45%, transparent 40%, rgba(0, 2, 6, .82) 100%);
+}
+
+/* Corner brackets around the whole console. */
+.frame {
+  position: fixed; inset: 10px; z-index: 60; pointer-events: none;
+  background:
+    linear-gradient(var(--cyan), var(--cyan)) top left / 26px 1px no-repeat,
+    linear-gradient(var(--cyan), var(--cyan)) top left / 1px 26px no-repeat,
+    linear-gradient(var(--cyan), var(--cyan)) top right / 26px 1px no-repeat,
+    linear-gradient(var(--cyan), var(--cyan)) top right / 1px 26px no-repeat,
+    linear-gradient(var(--cyan), var(--cyan)) bottom left / 26px 1px no-repeat,
+    linear-gradient(var(--cyan), var(--cyan)) bottom left / 1px 26px no-repeat,
+    linear-gradient(var(--cyan), var(--cyan)) bottom right / 26px 1px no-repeat,
+    linear-gradient(var(--cyan), var(--cyan)) bottom right / 1px 26px no-repeat;
+  opacity: .45;
+}
+
+/* --------------------------------------------------------------- controls */
+
+.hudBtn, .ghostBtn, .hudSelect, .back {
+  font-family: var(--mono);
+  font-size: 11px; letter-spacing: .12em; text-transform: uppercase;
+  color: var(--cyan);
+  background: rgba(10, 40, 58, .35);
+  border: 1px solid var(--edge);
+  border-radius: 2px;
+  padding: 0 12px; height: 28px;
+  cursor: pointer; text-decoration: none;
+  display: inline-flex; align-items: center; gap: 6px;
+  transition: background .15s, box-shadow .15s, color .15s;
+}
+.hudBtn:hover, .ghostBtn:hover, .hudSelect:hover, .back:hover {
+  background: rgba(111, 230, 255, .16);
+  box-shadow: 0 0 16px var(--cyanGlow), inset 0 0 12px rgba(111, 230, 255, .10);
+  color: #eafcff;
+}
+.hudBtn:disabled, .ghostBtn:disabled { opacity: .35; cursor: not-allowed; box-shadow: none; }
+.hudBtn.primary { background: rgba(111, 230, 255, .20); border-color: var(--cyan); color: #eafcff; }
+.ghostBtn { padding: 0 9px; background: transparent; border-color: var(--edgeSoft); }
+.hudSelect { appearance: none; max-width: 150px; padding: 0 6px; }
+.hudSelect option { background: #04121d; color: var(--fg); }
+
+:where(button, a, input, textarea, select):focus-visible {
+  outline: 1px solid var(--cyan); outline-offset: 2px;
+}
+
+/* -------------------------------------------------------------------- bar */
+
+.bar {
+  position: fixed; top: 22px; left: 26px; right: 26px; z-index: 40;
+  display: flex; align-items: center; gap: var(--s5);
+  height: 48px; padding: 0 var(--s4);
+  background: linear-gradient(180deg, rgba(10, 40, 58, .40), rgba(4, 18, 28, .22));
+  backdrop-filter: blur(5px);
+  -webkit-backdrop-filter: blur(5px);
+  border: 1px solid var(--edgeSoft);
+  border-left: 2px solid var(--cyan);
+}
+
+.ident { display: flex; flex-direction: column; gap: 1px; flex: none; }
+.identName { font-family: var(--mono); font-size: 13px; letter-spacing: .22em; color: var(--cyan); }
+.identSub { font-family: var(--mono); font-size: 9.5px; letter-spacing: .14em; color: var(--dim); }
+
+.seek {
+  flex: 1;
+  display: flex; align-items: center; gap: var(--s2);
+  height: 30px; padding: 0 var(--s3);
+  border: 1px solid var(--edgeSoft);
+  background: rgba(2, 14, 22, .5);
+}
+.seek:focus-within { border-color: var(--cyan); box-shadow: 0 0 20px var(--cyanGlow) inset; }
+.seekRune { color: var(--cyan); font-size: 13px; }
+.seek input {
+  flex: 1; min-width: 0;
+  background: none; border: 0; outline: none;
+  color: var(--fg);
+  font-family: var(--mono); font-size: 12px; letter-spacing: .06em;
+}
+.seek input::placeholder { color: var(--dim); }
+.seek input::-webkit-search-cancel-button { display: none; }
+
+.barRight { display: flex; align-items: center; gap: var(--s2); flex: none; }
+
+/* ------------------------------------------------------------------- deck */
+
+.stage { position: absolute; inset: 86px 0 0 0; z-index: 10; }
+
+/* The camera. One perspective origin for the whole stack, tilted a few degrees
+   off-axis so the receding windows show an edge instead of hiding exactly
+   behind the front one — that offset is the entire "windows behind windows"
+   read, and it costs one transform. */
+.deck {
+  position: absolute; inset: 0;
+  perspective: 2300px;
+  perspective-origin: 50% 44%;
+  /* Set by the pinch gesture. --zoom sizes the windows, --spread pushes them
+     apart: pinching out has to shrink each window AND fan the stack, or
+     "zoomed out" would just mean "smaller and still hidden behind each other". */
+  --zoom: 1;
+  --spread: 1;
+  /* The window box lives in variables so EXPAND and COLLAPSE can retarget it
+     without the centring maths going out of step with it. */
+  --winW: min(660px, 66vw);
+  --winH: min(480px, calc(100vh - 300px));
+  /* Deliberately NOT preserve-3d.
+     The windows are parallel planes that never intersect, so nothing here needs
+     a shared 3D space — perspective on this element projects each child on its
+     own either way, and the look is identical. What preserve-3d did do was
+     break hit testing: Chrome painted the front window across its full box but
+     only accepted clicks on part of it, so roughly the left half of the record
+     you are reading — its tabs, its title, its document tools — was dead to the
+     mouse while `elementsFromPoint` still swore the button was there. With the
+     stacking context flat, paint order is DOM order, so depth is carried by
+     z-index on .win instead. */
+  transform-style: flat;
+  transition: right .3s ease;
+}
+/* The windows are absolutely positioned against the deck, so making room for
+   the Oracle has to move the deck's box — padding would not shift them. */
+body.oracleOpen .deck { right: 372px; }
+
+.win {
+  position: absolute;
+  top: 50%; left: 50%;
+  /* --r is the window's depth index (0 is the front, higher is further back),
+     so this paints the stack front-to-back without depending on the order the
+     nodes happen to be appended in. */
+  --r: 0;
+  z-index: calc(50 - var(--r));
+  width: var(--winW);
+  height: var(--winH);
+  margin: calc(var(--winH) / -2) 0 0 calc(var(--winW) / -2);
+  display: flex; flex-direction: column;
+  text-align: left; color: inherit;
+  padding: 0;
+  cursor: pointer;
+
+  /* --r is the window's distance from the one you are reading: 0 is front,
+     1 is directly behind it, negative is already passed. */
+  /* The step back is mostly depth, with just enough right-and-up drift for each
+     window behind to show its own header edge. The rest of them is meant to be
+     read THROUGH the front window rather than beside it — a stack fanned out to
+     the side would be a carousel, not a cross-section. */
+  transform:
+    translate3d(
+      calc(var(--r) * 50px * var(--spread)),
+      calc(var(--r) * -34px * var(--spread)),
+      calc(var(--r) * -175px))
+    rotateY(-9deg) rotateX(1deg)
+    scale(var(--zoom));
+  transform-origin: 50% 50%;
+
+  background: linear-gradient(168deg, var(--paneLift), var(--pane) 55%, rgba(2, 12, 20, .30));
+  backdrop-filter: blur(3px) saturate(130%);
+  -webkit-backdrop-filter: blur(3px) saturate(130%);
+  border: 1px solid var(--edgeSoft);
+  box-shadow: 0 0 40px rgba(0, 0, 0, .45), inset 0 0 60px rgba(111, 230, 255, .04);
+  transition:
+    transform .45s cubic-bezier(.22, .8, .3, 1), opacity .45s, filter .45s,
+    width .35s cubic-bezier(.22, .8, .3, 1), height .35s cubic-bezier(.22, .8, .3, 1),
+    margin .35s cubic-bezier(.22, .8, .3, 1), border-color .3s;
+}
+
+/* Depth cues, applied by JS as a class per band rather than per index, so the
+   stack stays legible however many records are in it. */
+.win[data-band="front"] {
+  cursor: default;
+  border-color: var(--edge);
+  box-shadow: 0 0 70px rgba(0, 0, 0, .55), 0 0 30px var(--cyanGlow), inset 0 0 60px rgba(111, 230, 255, .05);
+  /* No z-index here: depth is --r's job alone. A flat stacking context makes a
+     second opinion about stacking a real bug rather than a dead declaration —
+     this one used to pin the front window UNDER the two behind it. */
+}
+/* Seen through the glass of the window in front, so they can carry more
+   presence than a card standing alone would need. */
+.win[data-band="near"] { opacity: .80; filter: saturate(.85); }
+.win[data-band="far"]  { opacity: .46; filter: saturate(.6) blur(.5px); }
+
+/* Pinched out far enough that the stack is the subject rather than the record
+   in front of it — so the depth cues that were hiding the tail come off. */
+.deck.spread .win[data-band="near"] { opacity: .92; filter: none; }
+.deck.spread .win[data-band="far"]  { opacity: .74; filter: saturate(.85); }
+.deck.spread .win { cursor: pointer; }
+.win[data-band="gone"] { opacity: 0; pointer-events: none; }
+.win[data-band="past"] {
+  opacity: 0; pointer-events: none;
+  transform: translate3d(-260px, 90px, 460px) rotateY(-9deg);
+}
+
+.win:not([data-band="front"]):hover { opacity: .85; border-color: var(--edge); }
+
+/* Corner ticks on the front window only — the marker for "this is the record
+   you are reading" is the same shape the console frame uses. */
+.win[data-band="front"]::before {
+  content: "";
+  position: absolute; inset: -1px; pointer-events: none;
+  background:
+    linear-gradient(var(--cyan), var(--cyan)) top left / 18px 2px no-repeat,
+    linear-gradient(var(--cyan), var(--cyan)) top left / 2px 18px no-repeat,
+    linear-gradient(var(--cyan), var(--cyan)) top right / 18px 2px no-repeat,
+    linear-gradient(var(--cyan), var(--cyan)) top right / 2px 18px no-repeat,
+    linear-gradient(var(--cyan), var(--cyan)) bottom left / 18px 2px no-repeat,
+    linear-gradient(var(--cyan), var(--cyan)) bottom left / 2px 18px no-repeat,
+    linear-gradient(var(--cyan), var(--cyan)) bottom right / 18px 2px no-repeat,
+    linear-gradient(var(--cyan), var(--cyan)) bottom right / 2px 18px no-repeat;
+}
+
+.win.cited { border-color: rgba(255, 180, 84, .6); box-shadow: 0 0 44px var(--amberGlow); }
+
+/* EXPAND — the record takes the console; the stack stays behind it, which is
+   why it is a resize and not a full-screen mode. */
+.deck.expanded .win[data-band="front"] {
+  --winW: min(1180px, 94%);
+  --winH: calc(100vh - 190px);
+}
+/* COLLAPSE — down to its own title bar, so the stack behind is unobstructed. */
+.deck.collapsed .win[data-band="front"] { --winH: 84px; }
+.deck.collapsed .win[data-band="front"] .winBody { display: none; }
+
+/* Controls live on the front window only: acting on a record you are not
+   reading is how you delete the wrong thing. */
+.winActs { display: none; gap: 4px; flex: none; }
+.win[data-band="front"] .winActs { display: flex; }
+.winAct {
+  font-family: var(--mono); font-size: 9.5px; letter-spacing: .1em;
+  color: var(--cyan); background: rgba(10, 40, 58, .5);
+  border: 1px solid var(--edgeSoft);
+  height: 22px; padding: 0 7px; cursor: pointer;
+  display: inline-flex; align-items: center; gap: 4px; text-decoration: none;
+  transition: background .15s, border-color .15s;
+}
+.winAct:hover { background: rgba(111, 230, 255, .18); border-color: var(--cyan); }
+
+.winTop {
+  display: flex; align-items: center; gap: var(--s3);
+  padding: var(--s3) var(--s4);
+  border-bottom: 1px solid var(--edgeSoft);
+  background: linear-gradient(180deg, rgba(111, 230, 255, .10), transparent);
+}
+.winId {
+  font-family: var(--mono); font-size: 10px; letter-spacing: .16em;
+  color: var(--void); background: var(--cyan);
+  padding: 2px 7px; flex: none;
+}
+.win.cited .winId { background: var(--amber); }
+.winTitle {
+  margin: 0; flex: 1; min-width: 0;
+  font-size: 14px; font-weight: 500; line-height: 1.35;
+  letter-spacing: .01em;
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+}
+.winMeta {
+  display: flex; flex-wrap: wrap; gap: var(--s3);
+  padding: 7px var(--s4);
+  font-family: var(--mono); font-size: 9.5px; letter-spacing: .12em;
+  color: var(--dim);
+  border-bottom: 1px solid var(--edgeSoft);
+}
+.winMeta .doc { color: var(--amber); }
+.winMeta .bad { color: var(--alert); }
+
+.winBody {
+  flex: 1; overflow-y: auto;
+  padding: var(--s4);
+  display: flex; flex-direction: column; gap: var(--s4);
+  scrollbar-width: thin; scrollbar-color: rgba(111, 230, 255, .35) transparent;
+}
+.winBody::-webkit-scrollbar { width: 6px; }
+.winBody::-webkit-scrollbar-thumb { background: rgba(111, 230, 255, .3); }
+/* Only the record you are reading scrolls; the ones behind are just there. */
+.win:not([data-band="front"]) .winBody { overflow: hidden; }
+
+.winFoot {
+  display: flex; align-items: center; gap: var(--s2);
+  padding: var(--s2) var(--s4);
+  border-top: 1px solid var(--edgeSoft);
+}
+
+.preview { font-size: 12.5px; line-height: 1.6; color: var(--fgSoft); }
+.preview mark { background: rgba(255, 180, 84, .22); color: var(--amber); }
+
+/* One turn inside a record. */
+.turn { display: flex; flex-direction: column; gap: 5px; max-width: min(92%, 74ch); }
+.turn.user { align-self: flex-end; align-items: flex-end; }
+.turnWho {
+  font-family: var(--mono); font-size: 9px; letter-spacing: .16em;
+  color: var(--dim); text-transform: uppercase;
+}
+.bubble {
+  padding: var(--s3);
+  font-size: 12.5px; line-height: 1.62;
+  white-space: pre-wrap; overflow-wrap: anywhere;
+  border: 1px solid var(--edgeSoft);
+  border-left-width: 2px;
+  /* Kept low: the turns are the largest opaque area on screen, and the stack
+     has to stay visible behind them. */
+  background: rgba(3, 20, 30, .30);
+  text-shadow: 0 1px 3px rgba(0, 6, 12, .9);
+}
+.turn.user .bubble { border-left-color: var(--amber); background: rgba(34, 22, 6, .30); }
+.turn.assistant .bubble { border-left-color: var(--cyanDim); }
+.bubble.errored { border-left-color: var(--alert); }
+.bubble mark { background: rgba(255, 180, 84, .25); color: var(--amber); }
+.turnErr { font-family: var(--mono); font-size: 10px; color: var(--alert); }
+
+.loadingRec { font-family: var(--mono); font-size: 11px; letter-spacing: .14em; color: var(--cyanDim); }
+.loadingRec::after { content: "▮"; animation: caret 1s steps(2) infinite; }
+@keyframes caret { 50% { opacity: 0; } }
+
+/* --------------------------------------------------------------- the rail */
+
+/* Depth readout down the left edge: one tick per record, so the stack has a
+   length you can see even when only three windows are legible. */
+.rail {
+  position: fixed; left: 26px; top: 50%; transform: translateY(-50%); z-index: 30;
+  display: flex; flex-direction: column; gap: 5px; align-items: flex-start;
+}
+.tick {
+  width: 16px; height: 2px; background: var(--cyanDim); opacity: .5;
+  transition: width .25s, background .25s, opacity .25s;
+  cursor: pointer; border: 0; padding: 0;
+}
+.tick:hover { width: 24px; opacity: .9; }
+.tick.on { width: 34px; background: var(--cyan); opacity: 1; box-shadow: 0 0 12px var(--cyanGlow); }
+.tick.cited { background: var(--amber); }
+
+.railCount {
+  font-family: var(--mono); font-size: 10px; letter-spacing: .16em;
+  color: var(--dim); margin-bottom: var(--s2);
+}
+
+/* Sits clear of the readout in the same corner band — the two never share a
+   line, however wide the console gets. */
+.deckHint {
+  position: fixed; bottom: 22px; left: 260px; right: 26px; z-index: 30;
+  text-align: center;
+  font-family: var(--mono); font-size: 9.5px; letter-spacing: .18em; color: var(--dim);
+  pointer-events: none;
+}
+body.oracleOpen .deckHint { right: 400px; }
+
+.voidNote {
+  position: absolute; inset: 0; display: grid; place-content: center;
+  font-family: var(--mono); font-size: 12px; letter-spacing: .16em; color: var(--dim);
+}
+
+/* Bottom-left console readout — the archive's vital signs, always on. */
+.readout {
+  position: fixed; left: 26px; bottom: 22px; z-index: 30;
+  display: flex; flex-direction: column; gap: 3px;
+  font-family: var(--mono); font-size: 9.5px; letter-spacing: .14em;
+  color: var(--dim);
+  border-left: 1px solid var(--edgeSoft);
+  padding-left: var(--s3);
+}
+.readout b { color: var(--cyan); font-weight: 400; }
+.readout .live { color: var(--amber); }
+
+/* ------------------------------------------------------------- index mode */
+
+/* The overview. Same glass, flattened — for when you want to see the whole
+   archive at once instead of travelling through it. */
+.index {
+  position: absolute; inset: 0; overflow-y: auto;
+  padding: var(--s5) var(--s6) 90px 70px;
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  gap: var(--s4); align-content: start;
+  transition: padding-right .3s ease;
+  scrollbar-width: thin; scrollbar-color: rgba(111, 230, 255, .35) transparent;
+}
+body.oracleOpen .index { padding-right: 400px; }
+.index::-webkit-scrollbar { width: 8px; }
+.index::-webkit-scrollbar-thumb { background: rgba(111, 230, 255, .3); }
+
+.card {
+  display: flex; flex-direction: column; gap: var(--s2);
+  padding: var(--s3) var(--s4) var(--s3);
+  min-height: 150px; cursor: pointer; text-align: left; color: inherit;
+  font: inherit;
+  background: linear-gradient(168deg, var(--paneLift), var(--pane));
+  backdrop-filter: blur(3px);
+  border: 1px solid var(--edgeSoft);
+  border-left: 2px solid var(--cyanDim);
+  transition: border-color .2s, box-shadow .2s, transform .2s;
+}
+.card:hover { border-left-color: var(--cyan); box-shadow: 0 0 26px var(--cyanGlow); transform: translateX(3px); }
+.card.cited { border-left-color: var(--amber); box-shadow: 0 0 26px var(--amberGlow); }
+.cardTop { display: flex; align-items: baseline; gap: var(--s2); }
+.cardTitle {
+  margin: 0; font-size: 13px; font-weight: 500; line-height: 1.35;
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+}
+.cardExcerpt {
+  margin: 0; font-size: 12px; line-height: 1.55; color: var(--fgSoft);
+  display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden;
+}
+.cardExcerpt mark { background: rgba(255, 180, 84, .2); color: var(--amber); }
+.cardMeta {
+  margin-top: auto;
+  font-family: var(--mono); font-size: 9.5px; letter-spacing: .12em; color: var(--dim);
+  display: flex; flex-wrap: wrap; gap: var(--s3);
+}
+
+/* ---------------------------------------------------------------- oracle */
+
+.oracle {
+  position: fixed; z-index: 35;
+  top: 86px; right: 26px; bottom: 26px;
+  width: 360px;
+  display: flex; flex-direction: column;
+  background: linear-gradient(180deg, rgba(10, 40, 58, .38), rgba(3, 16, 26, .30));
+  backdrop-filter: blur(5px) saturate(130%);
+  -webkit-backdrop-filter: blur(5px) saturate(130%);
+  border: 1px solid var(--edgeSoft);
+  border-right: 2px solid var(--cyan);
+  transition: transform .3s cubic-bezier(.22,.8,.3,1), opacity .3s;
+}
+.oracle.away { transform: translateX(calc(100% + 30px)); opacity: 0; pointer-events: none; }
+
+.oracleTop {
+  display: flex; align-items: center; gap: var(--s3);
+  padding: var(--s3) var(--s4);
+  border-bottom: 1px solid var(--edgeSoft);
+}
+.oracleTop > div { flex: 1; min-width: 0; }
+.oracleTop h2 { margin: 0; font-family: var(--mono); font-size: 13px; letter-spacing: .2em; color: var(--cyan); }
+.oracleSub { margin: 1px 0 0; font-family: var(--mono); font-size: 9px; letter-spacing: .1em; color: var(--dim); text-transform: uppercase; }
+.oracleTop .hudSelect { max-width: 106px; font-size: 9.5px; height: 24px; }
+
+.oracleMark { font-size: 15px; color: var(--cyan); text-shadow: 0 0 14px var(--cyanGlow); animation: pulse 3s ease-in-out infinite; }
+@keyframes pulse { 0%,100% { opacity: .55; } 50% { opacity: 1; } }
+
+.oracleLog {
+  flex: 1; overflow-y: auto; overflow-x: hidden; min-width: 0;
+  padding: var(--s4);
+  display: flex; flex-direction: column; gap: var(--s4);
+  scrollbar-width: thin; scrollbar-color: rgba(111, 230, 255, .3) transparent;
+}
+.oracleLog::-webkit-scrollbar { width: 6px; }
+.oracleLog::-webkit-scrollbar-thumb { background: rgba(111, 230, 255, .3); }
+
+.oracleIntro p {
+  margin: 0 0 var(--s3);
+  font-family: var(--mono); font-size: 10px; line-height: 1.8; letter-spacing: .08em;
+  color: var(--fgSoft);
+}
+.seeds { display: flex; flex-direction: column; gap: 6px; }
+.seed {
+  font: inherit; font-size: 11.5px; text-align: left; color: var(--fgSoft);
+  cursor: pointer; padding: 7px var(--s3);
+  background: rgba(3, 20, 30, .4);
+  border: 1px solid var(--edgeSoft); border-left: 2px solid var(--cyanDim);
+  transition: border-color .15s, color .15s, background .15s;
+}
+.seed:hover { border-left-color: var(--cyan); color: var(--fg); background: rgba(111, 230, 255, .10); }
+
+.oracleTurn { display: flex; flex-direction: column; gap: 5px; min-width: 0; max-width: 100%; }
+.oracleTurn.you { align-items: flex-end; }
+.oracleTurn .said {
+  max-width: 94%; min-width: 0; overflow-wrap: anywhere;
+  padding: var(--s2) var(--s3);
+  font-size: 12.5px; line-height: 1.6;
+  background: rgba(3, 20, 30, .45);
+  border: 1px solid var(--edgeSoft); border-left: 2px solid var(--cyanDim);
+}
+.oracleTurn.you .said { border-left-color: var(--amber); background: rgba(30, 20, 6, .4); }
+.said p { margin: 0 0 7px; }
+.said p:last-child { margin-bottom: 0; }
+.said strong { color: #fff; }
+.said code { font-family: var(--mono); font-size: 11.5px; background: rgba(111, 230, 255, .12); padding: 0 4px; }
+
+/* What the Oracle did before it answered, kept on screen: a retrieval answer
+   you cannot audit is just a confident guess. */
+.trail { display: flex; flex-wrap: wrap; gap: 5px; min-width: 0; max-width: 100%; }
+.trailChip {
+  font-family: var(--mono); font-size: 9.5px; letter-spacing: .1em;
+  padding: 2px 7px; max-width: 100%; overflow-wrap: anywhere; text-align: left;
+  border: 1px solid rgba(111, 230, 255, .28);
+  color: var(--cyan); background: rgba(111, 230, 255, .07);
+}
+.trailChip.thought { border-style: dashed; color: var(--fgSoft); border-color: var(--edgeSoft); text-transform: none; letter-spacing: 0; font-family: var(--sans); font-size: 11px; }
+
+.sourceLink {
+  font-family: var(--mono); font-size: 10px; letter-spacing: .08em;
+  cursor: pointer; padding: 3px 8px;
+  max-width: 100%; text-align: left; overflow-wrap: anywhere;
+  border: 1px solid rgba(255, 180, 84, .45);
+  background: rgba(255, 180, 84, .08); color: var(--amber);
+  transition: background .15s, box-shadow .15s;
+}
+.sourceLink:hover { background: rgba(255, 180, 84, .2); box-shadow: 0 0 16px var(--amberGlow); }
+
+.cite {
+  font-family: var(--mono); font-size: 10.5px; cursor: pointer; padding: 0 4px;
+  border: 1px solid rgba(255, 180, 84, .45);
+  background: rgba(255, 180, 84, .1); color: var(--amber);
+}
+.cite:hover { background: rgba(255, 180, 84, .25); }
+
+.oracleStage {
+  min-height: 16px; padding: 0 var(--s4) 6px;
+  font-family: var(--mono); font-size: 9.5px; letter-spacing: .1em; color: var(--cyan);
+  text-transform: uppercase;
+}
+.oracleStage:not(:empty)::before { content: "▸ "; }
+.oracleStage.working { animation: blink 1.6s ease-in-out infinite; }
+@keyframes blink { 0%,100% { opacity: .4; } 50% { opacity: 1; } }
+
+.oracleForm {
+  display: flex; align-items: flex-end; gap: var(--s2);
+  padding: var(--s3) var(--s4) var(--s4);
+  border-top: 1px solid var(--edgeSoft);
+}
+.oracleForm textarea {
+  flex: 1; resize: none; max-height: 130px; outline: none;
+  font-family: var(--mono); font-size: 11.5px; line-height: 1.55; letter-spacing: .04em;
+  color: var(--fg);
+  background: rgba(2, 14, 22, .55);
+  border: 1px solid var(--edgeSoft);
+  padding: 8px var(--s3);
+  transition: border-color .15s, box-shadow .15s;
+}
+.oracleForm textarea:focus { border-color: var(--cyan); box-shadow: inset 0 0 18px rgba(111, 230, 255, .10); }
+.oracleForm textarea::placeholder { color: var(--dim); }
+
+.oracleTab {
+  position: fixed; right: 26px; bottom: 26px; z-index: 36;
+  width: 42px; height: 42px;
+  font-size: 16px; color: var(--cyan); cursor: pointer;
+  background: rgba(10, 40, 58, .45);
+  border: 1px solid var(--edge);
+  backdrop-filter: blur(6px);
+  box-shadow: 0 0 24px var(--cyanGlow);
+}
+
+/* ----------------------------------------------------------- narrow decks */
+
+@media (max-width: 1100px) {
+  body.oracleOpen .deck { padding-right: 0; }
+  .oracle { top: auto; left: 26px; right: 26px; bottom: 26px; width: auto; height: 58vh; }
+  .win { width: min(620px, 86vw); }
+  body.oracleOpen .deckHint { right: 26px; }
+  .deckHint { left: 26px; }
+  .readout { display: none; }
+}
+
+/* The depth is the interface, so it stays; only the idle motion goes. */
+@media (prefers-reduced-motion: reduce) {
+  .grid3d, .sweep, .oracleMark, .oracleStage.working, .loadingRec::after { animation: none !important; }
+  .win, .oracle { transition: none; }
+}
+
+/* =========================================================== record faces */
+
+/* A record has more than a transcript: the document it is about, that
+   document's history, and what the cluster was asked. They are faces of the
+   same window rather than separate screens, so travelling keeps whichever
+   face you were reading. */
+.winTabs { display: none; gap: 1px; padding: 0 var(--s3); border-bottom: 1px solid var(--edgeSoft); }
+.win[data-band="front"] .winTabs { display: flex; }
+.deck.collapsed .win[data-band="front"] .winTabs { display: none; }
+
+.tab {
+  font-family: var(--mono); font-size: 9.5px; letter-spacing: .12em;
+  color: var(--dim); background: none; border: 0;
+  border-bottom: 2px solid transparent;
+  padding: 8px 11px; cursor: pointer;
+  transition: color .15s, border-color .15s;
+}
+.tab:hover { color: var(--fg); }
+.tab.on { color: var(--cyan); border-bottom-color: var(--cyan); }
+
+.tools {
+  display: flex; align-items: center; flex-wrap: wrap; gap: var(--s2);
+  padding-bottom: var(--s3);
+  border-bottom: 1px solid var(--edgeSoft);
+}
+.toolsMeta {
+  font-family: var(--mono); font-size: 9.5px; letter-spacing: .12em; color: var(--dim);
+  margin-left: auto;
+}
+
+.notice {
+  font-family: var(--mono); font-size: 11px; letter-spacing: .1em; line-height: 1.9;
+  color: var(--dim);
+}
+.notice.bad { color: var(--alert); }
+
+/* The document itself, read inside the record window. */
+.docText {
+  font-size: 12.5px; line-height: 1.75;
+  white-space: pre-wrap; overflow-wrap: anywhere;
+  color: var(--fgSoft);
+  text-shadow: 0 1px 3px rgba(0, 6, 12, .9);
+  padding: var(--s2) 0;
+  max-width: 78ch;
+}
+.docText mark { background: rgba(255, 180, 84, .25); color: var(--amber); }
+
+/* ---------------------------------------------------------------- versions */
+
+.verList { display: flex; flex-direction: column; gap: 1px; }
+.verRow {
+  display: flex; align-items: center; gap: var(--s3); flex-wrap: wrap;
+  padding: 7px var(--s2);
+  font-family: var(--mono); font-size: 10px; letter-spacing: .08em;
+  border-left: 2px solid transparent;
+  background: rgba(3, 20, 30, .3);
+}
+/* The two sides of the comparison are marked on the rows themselves, so the
+   COMPARE button never has to be read to know what it will do. */
+.verRow.isFrom { border-left-color: var(--alert); }
+.verRow.isTo { border-left-color: var(--cyan); }
+.verNo { color: var(--cyan); min-width: 34px; }
+.verStat { min-width: 92px; }
+.verMeta { color: var(--dim); }
+.verActs { margin-left: auto; display: flex; gap: 4px; }
+.add { color: #6ee7a8; }
+.del { color: var(--alert); }
+.warn { color: var(--amber); }
+
+.diffOut { margin-top: var(--s4); }
+.diffHead {
+  font-family: var(--mono); font-size: 10px; letter-spacing: .12em;
+  color: var(--fgSoft); padding-bottom: var(--s2);
+  border-bottom: 1px solid var(--edgeSoft);
+}
+.hunk { margin-top: var(--s3); }
+.hunkHead {
+  font-family: var(--mono); font-size: 9.5px; letter-spacing: .1em;
+  color: var(--cyanDim); padding: 2px 0;
+}
+.dLine {
+  display: flex; gap: var(--s2);
+  font-family: var(--mono); font-size: 11px; line-height: 1.65;
+  padding: 0 4px;
+  white-space: pre-wrap; overflow-wrap: anywhere;
+}
+.dLine.add { background: rgba(110, 231, 168, .10); color: #cfeedd; }
+.dLine.del { background: rgba(255, 107, 90, .10); color: #ffd8d2; }
+.dLine.ctx { color: var(--dim); }
+.dMark { flex: none; width: 10px; color: var(--dim); }
+/* Word-level change inside a changed line — the same signal the lab uses. */
+.wch { background: rgba(111, 230, 255, .22); border-radius: 2px; }
+
+/* ------------------------------------------------------------------ traces */
+
+.traceList { display: flex; flex-direction: column; gap: 1px; }
+.traceRow {
+  display: flex; align-items: center; gap: var(--s3); flex-wrap: wrap;
+  padding: 6px var(--s2);
+  font-family: var(--mono); font-size: 10px; letter-spacing: .08em;
+  color: var(--fgSoft);
+  background: rgba(3, 20, 30, .3);
+  border-left: 2px solid var(--cyanDim);
+}
+.traceRow.bad { border-left-color: var(--alert); }
+.traceKind { color: var(--cyan); min-width: 62px; }
+.traceErr { color: var(--alert); flex-basis: 100%; }
+
+/* --------------------------------------------------------------- snackbars */
+
+.snacks {
+  position: fixed; left: 50%; bottom: 58px; transform: translateX(-50%); z-index: 70;
+  display: flex; flex-direction: column-reverse; align-items: center; gap: var(--s2);
+  pointer-events: none;
+}
+body.oracleOpen .snacks { left: calc(50% - 190px); }
+
+.snack {
+  display: flex; align-items: center; gap: var(--s2);
+  max-width: 460px;
+  padding: 8px var(--s4);
+  font-family: var(--mono); font-size: 10.5px; letter-spacing: .08em;
+  color: var(--fg);
+  background: rgba(6, 26, 40, .82);
+  backdrop-filter: blur(8px);
+  border: 1px solid var(--edge);
+  border-left: 2px solid var(--cyan);
+  box-shadow: 0 0 26px rgba(0, 0, 0, .5);
+  opacity: 1; transform: translateY(0);
+  transition: opacity .3s, transform .3s;
+  animation: snackIn .26s cubic-bezier(.22, .8, .3, 1);
+}
+.snack.out { opacity: 0; transform: translateY(8px); }
+.snack.err { border-left-color: var(--alert); }
+.snack.err .snackMark { color: var(--alert); }
+.snack.info { border-left-color: var(--amber); }
+.snack.info .snackMark { color: var(--amber); }
+.snackMark { color: var(--cyan); }
+@keyframes snackIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: none; } }
+
+@media (prefers-reduced-motion: reduce) { .snack { animation: none; } }
+
+/* ============================================================ write actions */
+
+.winAct.danger { color: var(--alert); border-color: rgba(255, 107, 90, .35); }
+.winAct.danger:hover { background: rgba(255, 107, 90, .16); border-color: var(--alert); }
+
+.hintLine {
+  margin: var(--s3) 0 0;
+  font-family: var(--mono); font-size: 9px; letter-spacing: .14em; color: var(--dim);
+}
+
+/* Per-turn actions live under the bubble, out of the reading line. */
+.turnActs { display: flex; gap: 4px; opacity: 0; transition: opacity .15s; }
+.turn:hover .turnActs, .turnActs:focus-within { opacity: 1; }
+
+/* The rewrite popup, anchored to the passage it will rewrite. */
+.rewritePop {
+  position: fixed; z-index: 80;
+  display: flex; align-items: center; gap: var(--s2);
+  width: 420px; padding: 7px var(--s3);
+  background: rgba(6, 26, 40, .92);
+  backdrop-filter: blur(10px);
+  border: 1px solid var(--cyan);
+  box-shadow: 0 0 30px var(--cyanGlow), 0 12px 30px rgba(0, 0, 0, .5);
+}
+.rewriteMark {
+  font-family: var(--mono); font-size: 9.5px; letter-spacing: .14em; color: var(--cyan);
+  flex: none;
+}
+.rewriteInstr {
+  flex: 1; min-width: 0;
+  font-family: var(--mono); font-size: 11px; letter-spacing: .04em;
+  color: var(--fg); background: rgba(2, 14, 22, .6);
+  border: 1px solid var(--edgeSoft); outline: none;
+  padding: 5px var(--s2);
+}
+.rewriteInstr:focus { border-color: var(--cyan); }
+.rewriteInstr::placeholder { color: var(--dim); }
+
+/* ------------------------------------------------------------------ dialog */
+
+.modal {
+  position: fixed; inset: 0; z-index: 90;
+  display: grid; place-items: center;
+  background: rgba(1, 8, 14, .72);
+  backdrop-filter: blur(5px);
+  animation: fadeIn .18s ease;
+}
+@keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+
+.modalBox {
+  width: min(520px, calc(100vw - 48px));
+  background: linear-gradient(168deg, var(--paneLift), var(--pane) 60%, rgba(2, 12, 20, .5));
+  backdrop-filter: blur(14px) saturate(140%);
+  border: 1px solid var(--edge);
+  border-left: 2px solid var(--cyan);
+  box-shadow: 0 0 60px rgba(0, 0, 0, .6), 0 0 30px var(--cyanGlow);
+}
+.modalTop {
+  padding: var(--s3) var(--s4);
+  font-family: var(--mono); font-size: 11px; letter-spacing: .18em; color: var(--cyan);
+  border-bottom: 1px solid var(--edgeSoft);
+}
+.modalBody { padding: var(--s4); display: flex; flex-direction: column; gap: var(--s2); }
+.modalWhat { margin: 0 0 var(--s2); font-size: 12.5px; line-height: 1.65; color: var(--fgSoft); }
+.modalLabel { font-family: var(--mono); font-size: 9.5px; letter-spacing: .12em; color: var(--dim); }
+.modalInput {
+  font-family: var(--mono); font-size: 12px;
+  color: var(--fg); background: rgba(2, 14, 22, .6);
+  border: 1px solid var(--edgeSoft); outline: none;
+  padding: 8px var(--s3);
+}
+.modalInput:focus { border-color: var(--cyan); box-shadow: inset 0 0 18px rgba(111, 230, 255, .1); }
+.modalErr { margin: 0; min-height: 14px; font-family: var(--mono); font-size: 10px; color: var(--alert); }
+.modalActs {
+  display: flex; justify-content: flex-end; gap: var(--s2);
+  padding: var(--s3) var(--s4);
+  border-top: 1px solid var(--edgeSoft);
+}
+/* A destructive confirm is the one button on this console that is not cyan. */
+.hudBtn.danger {
+  color: #fff; background: rgba(255, 107, 90, .28); border-color: var(--alert);
+}
+.hudBtn.danger:hover { background: rgba(255, 107, 90, .45); box-shadow: 0 0 18px rgba(255, 107, 90, .4); }
+
+.snackAct {
+  font: inherit; font-family: var(--mono); font-size: 9.5px; letter-spacing: .12em;
+  margin-left: var(--s2); padding: 3px 8px; cursor: pointer;
+  color: var(--cyan); background: rgba(111, 230, 255, .12);
+  border: 1px solid var(--edge);
+}
+.snackAct:hover { background: rgba(111, 230, 255, .26); }
+
+/* ------------------------------------------------------- the composer */
+
+/* Talking to a record happens on the record: the composer is the foot of the
+   front window, not a bar at the bottom of the console, because what you type
+   goes into that conversation and no other. */
+.winFoot {
+  align-items: flex-end;
+  background: linear-gradient(0deg, rgba(111, 230, 255, .07), transparent);
+}
+.win:not([data-band="front"]) .winFoot { display: none; }
+.deck.collapsed .win[data-band="front"] .winFoot { display: none; }
+
+.composerInput {
+  flex: 1; min-width: 0;
+  resize: none; height: 30px; max-height: 120px;
+  font-family: var(--mono); font-size: 11.5px; line-height: 1.5;
+  color: var(--fg); background: rgba(2, 14, 22, .55);
+  border: 1px solid var(--edgeSoft); outline: none;
+  padding: 7px var(--s3);
+}
+.composerInput:focus { border-color: var(--cyan); box-shadow: 0 0 14px var(--cyanGlow); }
+.composerInput:disabled { opacity: .5; }
+.composerInput::placeholder { color: var(--dim); letter-spacing: .1em; }
+.winFoot .hudSelect { height: 30px; max-width: 108px; font-size: 9.5px; }
+.winFoot .hudBtn, .winFoot .ghostBtn { height: 30px; flex: none; }
+
+/* What the turn is doing right now — one line, in the composer, where the eye
+   already is while waiting. */
+.composerStage {
+  font-family: var(--mono); font-size: 9px; letter-spacing: .12em;
+  color: var(--dim); flex: none; max-width: 150px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  padding-bottom: 8px;
+}
+.composerStage.working { color: var(--amber); }
+.composerStage.working::after { content: "▮"; animation: caret 1s steps(2) infinite; }
+
+/* An action that has already been taken — kept, checked — reads as lit rather
+   than available. */
+.winAct.on { border-color: var(--amber); color: var(--amber); }
+
+.editInput {
+  width: 100%; min-height: 90px; resize: vertical;
+  font-family: var(--mono); font-size: 11.5px; line-height: 1.6;
+  color: var(--fg); background: rgba(2, 14, 22, .6);
+  border: 1px solid var(--cyan); outline: none;
+  padding: var(--s3);
+}
+.turn.editing .turnActs { opacity: 1; }
+
+/* Ground-truth findings, under the answer they are about. */
+.gtBox {
+  margin-top: var(--s2);
+  border-left: 2px solid var(--amber);
+  padding: var(--s2) var(--s3);
+  background: rgba(255, 180, 84, .05);
+}
+.dNote { font-size: 11px; line-height: 1.6; color: var(--dim); padding: 2px 4px; }
+
+/* ----------------------------------------------------------- the sheet */
+
+.sheetBox { width: min(760px, calc(100vw - 48px)); }
+.sheetBody {
+  padding: var(--s4);
+  max-height: min(60vh, 520px); overflow-y: auto;
+  display: flex; flex-direction: column; gap: var(--s2);
+  scrollbar-width: thin; scrollbar-color: rgba(111, 230, 255, .35) transparent;
+}
+.pickRow {
+  display: grid; grid-template-columns: auto 1fr auto; gap: var(--s2) var(--s3);
+  align-items: start; text-align: left;
+  padding: var(--s3); cursor: pointer;
+  background: rgba(10, 40, 58, .28);
+  border: 1px solid var(--edgeSoft);
+  color: inherit; font: inherit;
+}
+.pickRow:hover { border-color: var(--cyan); background: rgba(111, 230, 255, .10); }
+.pickRow.on { border-color: var(--amber); }
+.pickBox { accent-color: var(--cyan); margin-top: 2px; }
+.pickMeta {
+  grid-column: 2 / -1;
+  font-family: var(--mono); font-size: 9px; letter-spacing: .12em; color: var(--dim);
+}
+.pickText {
+  grid-column: 2 / 3;
+  font-size: 12px; line-height: 1.6; color: var(--fgSoft);
+  display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden;
+}
+.pickRow > .winAct { grid-column: 3 / 4; grid-row: 2 / 3; }

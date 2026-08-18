@@ -102,13 +102,23 @@ function buildModal(title, apiPath) {
   actions.append(addBtn, saveBtn, closeBtn);
   head.append(heading, source, actions);
 
+  // Leaving with unsaved edits asks first, and asks inside the sheet: a native
+  // confirm() would arrive in the OS's own styling and block the page.
+  const discard = elem('div', 'llmset-discard hidden');
+  const discardText = elem('span', null, 'Discard unsaved provider changes?');
+  const discardYes = elem('button', 'small', 'Discard');
+  discardYes.type = 'button';
+  const discardNo = elem('button', 'small primary', 'Keep editing');
+  discardNo.type = 'button';
+  discard.append(discardText, discardYes, discardNo);
+
   const body = elem('div', 'llmset-body');
   const note = elem('div', 'llmset-note');
   const list = elem('div', 'llmset-list');
   const status = elem('div', 'llmset-status');
   body.append(note, list, status);
 
-  sheet.append(head, body);
+  sheet.append(head, discard, body);
   overlay.appendChild(sheet);
 
   // Live editor state. `apiKey === undefined` means "leave the stored secret
@@ -396,12 +406,15 @@ function buildModal(title, apiPath) {
   closeBtn.addEventListener('click', () => {
     // Unsaved edits are easy to make here and expensive to redo, so leaving with
     // them pending asks first — this is the only prompt the screen shows.
-    if (dirty && !confirm('Discard unsaved provider changes?')) return;
+    if (dirty) { discard.classList.remove('hidden'); discardNo.focus(); return; }
     close();
   });
+  discardYes.addEventListener('click', () => { discard.classList.add('hidden'); close(); });
+  discardNo.addEventListener('click', () => discard.classList.add('hidden'));
 
   function open() {
     overlay.classList.remove('hidden');
+    discard.classList.add('hidden');
     load();
   }
   const close = () => overlay.classList.add('hidden');

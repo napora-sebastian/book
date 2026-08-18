@@ -1,148 +1,223 @@
 /**
  * llm-settings — self-contained styling.
  *
- * Every colour reads a host variable with a dark fallback, so the screen takes
- * on the host app's palette when it defines one (--panel, --line, --fg, …) and
- * still looks deliberate in a plain page that defines nothing.
+ * Every colour, radius and control height reads a host variable with a fallback,
+ * so the screen takes on the host app's design system when it defines one
+ * (--panel, --line, --fg, --radius, --ctl, …) and still looks deliberate in a
+ * plain page that defines nothing.
  */
 
 .llmset-trigger {
-  padding: 4px 9px;
-  font: inherit;
-  font-size: 12px;
-  border-radius: 7px;
-  border: 1px solid var(--line, #262c37);
-  background: var(--panel, #161a21);
-  color: var(--fg, #e6e9ef);
+  height: var(--ctlSm, 28px); padding: 0 10px;
+  display: inline-flex; align-items: center; gap: 6px;
+  font: inherit; font-size: 12.5px; font-weight: 500; line-height: 1;
+  border-radius: var(--radiusSm, 8px);
+  border: 1px solid var(--line, #e8e6e0);
+  background: var(--panel, #fff);
+  color: var(--fgSoft, #45433d);
   cursor: pointer;
+  transition: background .13s ease, border-color .13s ease, color .13s ease;
 }
-.llmset-trigger:hover { border-color: var(--accent, #76b900); }
+.llmset-trigger:hover {
+  background: var(--hover, #f2f1ec);
+  border-color: var(--lineStrong, #d7d4cb);
+  color: var(--fg, #1f1e1c);
+}
 
 .llmset-overlay {
   position: fixed; inset: 0; z-index: 60;
-  background: rgba(0, 0, 0, .55);
+  background: rgba(28, 25, 20, .38);
+  backdrop-filter: blur(2px);
   display: flex; align-items: center; justify-content: center;
-  padding: 24px;
+  padding: 4vh 4vw;
 }
 .llmset-overlay.hidden { display: none; }
 
 .llmset-sheet {
-  width: min(720px, 100%); max-height: 88vh;
+  width: min(760px, 100%); max-height: 92vh;
   display: flex; flex-direction: column; min-height: 0;
-  background: var(--panel, #161a21);
-  color: var(--fg, #e6e9ef);
-  border: 1px solid var(--line, #262c37);
-  border-radius: var(--radius, 10px);
-  font: 14px/1.55 ui-sans-serif, -apple-system, "SF Pro Text", system-ui, sans-serif;
-  box-shadow: 0 18px 50px rgba(0, 0, 0, .4);
+  background: var(--panel, #fff);
+  color: var(--fg, #1f1e1c);
+  border: 1px solid var(--line, #e8e6e0);
+  border-radius: var(--radius, 12px);
+  font: 14px/1.6 var(--sans, ui-sans-serif, -apple-system, system-ui, sans-serif);
+  box-shadow: var(--shadowSheet, 0 24px 70px rgba(28, 25, 20, .18));
+  overflow: hidden;
 }
 
 .llmset-head {
-  display: flex; align-items: center; gap: 10px;
-  padding: 11px 14px; border-bottom: 1px solid var(--line, #262c37);
+  flex-shrink: 0; min-height: 56px;
+  display: flex; align-items: center; gap: 12px;
+  padding: 12px 20px; border-bottom: 1px solid var(--line, #e8e6e0);
 }
-.llmset-headActions { display: flex; gap: 7px; margin-left: auto; }
+.llmset-head > strong { font-size: 15px; font-weight: 650; letter-spacing: -.01em; }
+.llmset-headActions { display: flex; gap: 8px; margin-left: auto; }
 
 .llmset-source {
-  font: 11px ui-monospace, SFMono-Regular, Menlo, monospace;
-  color: var(--dim, #8b93a3);
+  display: inline-flex; align-items: center;
+  font: 11px var(--mono, ui-monospace, Menlo, monospace);
+  color: var(--dim, #78756c);
 }
-.llmset-source.db::before  { content: "● "; color: var(--accent, #76b900); }
-.llmset-source.env::before { content: "● "; color: #d29922; }
-.llmset-source.none::before { content: "● "; color: var(--err, #ff6b6b); }
+.llmset-source::before {
+  content: ""; width: 6px; height: 6px; margin-right: 7px; border-radius: 50%;
+  background: var(--dim, #78756c);
+}
+.llmset-source.db::before   { background: var(--addFg, #1a7f37); }
+.llmset-source.env::before  { background: var(--warn, #a9701c); }
+.llmset-source.none::before { background: var(--err, #c0392f); }
 
-.llmset-body { overflow-y: auto; padding: 12px 14px 16px; min-height: 0; }
-.llmset-note { font-size: 12px; color: var(--dim, #8b93a3); margin-bottom: 12px; }
-.llmset-list { display: flex; flex-direction: column; gap: 10px; }
-.llmset-empty { font-size: 12.5px; color: var(--dim, #8b93a3); padding: 18px; text-align: center; }
+/* The leave-with-unsaved-edits question, asked in the sheet rather than by the
+   browser — a strip under the header, where the Close button just was. */
+.llmset-discard {
+  display: flex; align-items: center; gap: 10px;
+  padding: 10px 20px; border-bottom: 1px solid var(--line, #e8e6e0);
+  background: var(--errSoft, rgba(192, 57, 47, .08));
+  font-size: 12.5px;
+}
+.llmset-discard.hidden { display: none; }
+.llmset-discard > span { flex: 1; }
+
+.llmset-body { overflow-y: auto; padding: 20px; min-height: 0; background: var(--bg, #faf9f7); }
+.llmset-note { font-size: 12.5px; line-height: 1.65; color: var(--dim, #78756c); margin-bottom: 16px; }
+.llmset-list { display: flex; flex-direction: column; gap: 12px; }
+.llmset-empty { font-size: 13px; color: var(--dim, #78756c); padding: 28px; text-align: center; }
 
 /* ------------------------------------------------------------------- cards */
 
 .llmset-card {
-  border: 1px solid var(--line, #262c37);
-  border-radius: 9px;
-  padding: 10px 11px 11px;
-  background: var(--bg, #0f1115);
+  border: 1px solid var(--line, #e8e6e0);
+  border-radius: var(--radius, 12px);
+  padding: 14px 16px 16px;
+  background: var(--panel, #fff);
+  box-shadow: var(--shadow, 0 1px 2px rgba(28, 25, 20, .05));
 }
 /* The main provider carries every request until it fails — mark it as the one
    that matters, so a mis-ordered chain is visible without reading the badges. */
-.llmset-card.main { border-color: var(--accent, #76b900); }
+.llmset-card.main { border-color: var(--accent, #2f6fdd); }
 /* Kept in the list, skipped by the chain — dimmed rather than hidden, so the
    order it will resume in is still visible. */
 .llmset-card.off { opacity: .55; }
 
-.llmset-cardHead { display: flex; align-items: center; gap: 7px; margin-bottom: 9px; }
+.llmset-cardHead { display: flex; align-items: center; gap: 8px; margin-bottom: 12px; }
 .llmset-badge {
-  font: 10px ui-monospace, SFMono-Regular, Menlo, monospace;
-  letter-spacing: .6px;
-  padding: 2px 6px; border-radius: 5px;
-  border: 1px solid var(--line, #262c37);
-  color: var(--dim, #8b93a3);
+  font: 10px var(--mono, ui-monospace, Menlo, monospace);
+  letter-spacing: .06em; text-transform: uppercase;
+  padding: 2px 8px; border-radius: var(--radiusPill, 999px);
+  background: var(--bg, #faf9f7);
+  border: 1px solid var(--line, #e8e6e0);
+  color: var(--dim, #78756c);
   white-space: nowrap;
 }
-.llmset-card.main .llmset-badge { color: var(--accent, #76b900); border-color: var(--accent, #76b900); }
+.llmset-card.main .llmset-badge {
+  color: var(--accent, #2f6fdd);
+  border-color: transparent;
+  background: var(--accentSoft, rgba(47, 111, 221, .1));
+}
 .llmset-label { flex: 1; }
 
-.llmset-field { display: block; margin-top: 8px; }
+.llmset-field { display: block; margin-top: 12px; }
 .llmset-fieldLbl {
-  display: block; margin-bottom: 3px;
-  font-size: 11px; text-transform: uppercase; letter-spacing: .5px;
-  color: var(--dim, #8b93a3);
+  display: block; margin-bottom: 5px;
+  font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .07em;
+  color: var(--dim, #78756c);
 }
-.llmset-hint { display: block; margin-top: 3px; font-size: 11px; color: var(--dim, #8b93a3); }
+.llmset-hint { display: block; margin-top: 5px; font-size: 11.5px; color: var(--dim, #78756c); }
 
 .llmset-input {
-  width: 100%;
-  padding: 6px 8px;
-  border-radius: 7px;
-  border: 1px solid var(--line, #262c37);
-  background: var(--panel, #161a21);
-  color: var(--fg, #e6e9ef);
-  font: 12.5px ui-monospace, SFMono-Regular, Menlo, monospace;
+  width: 100%; height: var(--ctl, 32px); padding: 0 11px;
+  border-radius: var(--radiusSm, 8px);
+  border: 1px solid var(--line, #e8e6e0);
+  background: var(--panel, #fff);
+  color: var(--fg, #1f1e1c);
+  font: 12.5px var(--mono, ui-monospace, Menlo, monospace);
+  transition: border-color .13s ease, box-shadow .13s ease;
 }
-.llmset-input:focus { outline: none; border-color: var(--accent, #76b900); }
+.llmset-input:focus {
+  outline: none;
+  border-color: var(--accent, #2f6fdd);
+  box-shadow: 0 0 0 3px var(--ring, rgba(47, 111, 221, .22));
+}
+select.llmset-input { cursor: pointer; }
 
 .llmset-modelRow { display: flex; gap: 6px; align-items: center; }
 .llmset-modelRow .llmset-input { flex: 1; min-width: 0; }
 .llmset-modelRow button { white-space: nowrap; }
 
 .llmset-icon {
-  padding: 4px 7px; line-height: 1;
-  border-radius: 6px;
-  border: 1px solid var(--line, #262c37);
-  background: var(--panel, #161a21);
-  color: var(--dim, #8b93a3);
+  width: var(--ctl, 32px); height: var(--ctl, 32px); padding: 0;
+  display: inline-flex; align-items: center; justify-content: center;
+  border-radius: var(--radiusSm, 8px);
+  border: 1px solid var(--line, #e8e6e0);
+  background: var(--panel, #fff);
+  color: var(--dim, #78756c);
+  font: inherit; font-size: 12.5px; line-height: 1;
   cursor: pointer;
+  transition: background .13s ease, border-color .13s ease, color .13s ease;
 }
-.llmset-icon:hover:not(:disabled) { color: var(--fg, #e6e9ef); }
+.llmset-icon:hover:not(:disabled) {
+  background: var(--hover, #f2f1ec);
+  border-color: var(--lineStrong, #d7d4cb);
+  color: var(--fg, #1f1e1c);
+}
 .llmset-icon:disabled { opacity: .35; cursor: default; }
-.llmset-icon.danger:hover:not(:disabled) { color: var(--err, #ff6b6b); border-color: var(--err, #ff6b6b); }
+.llmset-icon.danger:hover:not(:disabled) {
+  color: var(--err, #c0392f);
+  border-color: var(--err, #c0392f);
+  background: var(--errSoft, rgba(192, 57, 47, .08));
+}
 
 .llmset-probe {
-  margin-top: 8px; padding: 5px 8px; border-radius: 6px;
-  font: 11.5px ui-monospace, SFMono-Regular, Menlo, monospace;
-  word-break: break-word;
+  margin-top: 12px; padding: 7px 10px; border-radius: var(--radiusSm, 8px);
+  font: 11.5px/1.6 var(--mono, ui-monospace, Menlo, monospace);
+  word-break: break-word; border: 1px solid transparent;
 }
-.llmset-probe.ok  { color: var(--addFg, #3fb950); border: 1px solid var(--addFg, #3fb950); }
-.llmset-probe.bad { color: var(--err, #ff6b6b); border: 1px solid var(--err, #ff6b6b); }
+.llmset-probe.ok {
+  color: var(--addFg, #1a7f37);
+  background: var(--diffAdd, #e9f7ec);
+  border-color: color-mix(in srgb, var(--addFg, #1a7f37) 30%, transparent);
+}
+.llmset-probe.bad {
+  color: var(--err, #c0392f);
+  background: var(--errSoft, rgba(192, 57, 47, .08));
+  border-color: color-mix(in srgb, var(--err, #c0392f) 35%, transparent);
+}
 
 .llmset-status {
-  margin-top: 12px;
-  font: 11.5px ui-monospace, SFMono-Regular, Menlo, monospace;
-  color: var(--dim, #8b93a3);
-  min-height: 16px;
+  margin-top: 16px; min-height: 18px;
+  font: 11.5px var(--mono, ui-monospace, Menlo, monospace);
+  color: var(--dim, #78756c);
 }
-.llmset-status.ok  { color: var(--addFg, #3fb950); }
-.llmset-status.bad { color: var(--err, #ff6b6b); }
+.llmset-status.ok  { color: var(--addFg, #1a7f37); }
+.llmset-status.bad { color: var(--err, #c0392f); }
 
-/* Buttons the plugin creates in a host that has no button styling of its own. */
+/* Buttons the plugin creates in a host that has no button styling of its own —
+   sized to the host's control height so they line up with everything else. */
 .llmset-sheet button.small {
-  padding: 4px 9px; font-size: 12px; border-radius: 7px;
-  border: 1px solid var(--line, #262c37);
-  background: var(--panel, #161a21);
-  color: var(--fg, #e6e9ef);
+  height: var(--ctlSm, 28px); padding: 0 10px;
+  display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+  font: inherit; font-size: 12.5px; font-weight: 500; line-height: 1;
+  border-radius: var(--radiusSm, 8px);
+  border: 1px solid var(--line, #e8e6e0);
+  background: var(--panel, #fff);
+  color: var(--fgSoft, #45433d);
   cursor: pointer;
+  transition: background .13s ease, border-color .13s ease, color .13s ease;
 }
-.llmset-sheet button.small:hover:not(:disabled) { border-color: var(--accent, #76b900); }
-.llmset-sheet button.small:disabled { opacity: .5; cursor: default; }
-.llmset-sheet button.small.primary { border-color: var(--accent, #76b900); color: var(--accent, #76b900); }
+.llmset-sheet button.small:hover:not(:disabled) {
+  background: var(--hover, #f2f1ec);
+  border-color: var(--lineStrong, #d7d4cb);
+  color: var(--fg, #1f1e1c);
+}
+.llmset-sheet button.small:disabled { opacity: .45; cursor: default; }
+.llmset-sheet button.small.primary {
+  background: var(--accent, #2f6fdd);
+  border-color: transparent;
+  color: var(--accentFg, #fff);
+  font-weight: 600;
+}
+.llmset-sheet button.small.primary:hover:not(:disabled) {
+  filter: brightness(1.07);
+  background: var(--accent, #2f6fdd);
+  border-color: transparent;
+  color: var(--accentFg, #fff);
+}

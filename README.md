@@ -183,6 +183,185 @@ under the title always states what will actually be sent — `ksiazka.docx · 42
 words · ~74,000 tokens`, or `no document attached`. Trust that line over the
 dropdown; if a thread ever answers as though it never read the book, check it.
 
+## The Archive Deck — every conversation, seen in depth (`/grimoire`)
+
+The main view answers questions about *one document you have chosen*. The deck
+answers the other kind: "where did we settle the ending of chapter one?" — a
+question whose hard part is finding the conversation, not answering it. It is a
+second, self-contained front end at `http://localhost:5173/grimoire` (the
+✦ Grimoire link in the top bar) over the same database — and it is not a
+read-only companion to the main view. Everything the lab can do, the deck can
+do: hold a conversation, revise a document, check an answer against its source.
+Nothing on it sends you back to the old view to finish a job.
+
+It is built as a stack rather than a list. The record you are reading is the
+window in front; every other conversation stands behind it, translucent, in
+deck order — so what you are looking at always has the rest of the archive
+visible through it. There is no "open" step and no dialog: travelling *is*
+opening, and the front window loads its full transcript on arrival.
+
+### Moving the deck
+
+| | |
+| --- | --- |
+| `←` `→`, swipe, or scroll | travel one record forward or back |
+| pinch (trackpad or touch), `+` `−` `0` | zoom the whole stack: pinching out shrinks each window **and** fans the deck, so the tail becomes visible instead of just smaller |
+| click any window standing behind | brings it to the front |
+| `↑` `↓` | scroll the record you are reading |
+| `F` / `C`, or the window's own `⤢` `–` | expand the front record to fill the console, or collapse it to its title bar |
+| `I` | flip to the flat index of every record and back |
+| `/` | the query box |
+| **ask the Oracle** | "go forward", "back two", "przejdź do trzeciego", "show me record 12", "back to the start" |
+
+That last row is the point of the Oracle sitting on the same screen: a movement
+instruction is answered by *moving*, not by retrieval. The planner is shown the
+deck as you currently see it — which window is in front, in what order, filtered
+or not — so "the third one" means the third window on screen. It costs one call
+and no search.
+
+Each front window also carries `◈ ASK`, which aims a question at that record
+without leaving the deck. The `◀ LAB` link in the corner is a route switch, not
+a feature: it exists because two front ends over one database should each be
+reachable from the other, and nothing on the deck needs it.
+
+### What a record shows
+
+A conversation is not only its messages, so the front window has four faces and
+travelling keeps whichever one you were reading:
+
+| Face | What is on it |
+| --- | --- |
+| `TRANSCRIPT` | every turn, with model, duration and any error |
+| `DOCUMENT` | the extracted text of the document this thread is about, plus copy and DOCX/RTF export |
+| `VERSIONS` | every saved state of that document with `+N −M`, and a word-level diff between any two of them |
+| `TRACES` | every call this thread made to the cluster — model served, tokens, TTFT, duration, failures — and the thread's totals |
+
+### Working on the content
+
+The deck is not a viewer. Everything the lab does to a document can be done from
+the record window, through the lab's own endpoints:
+
+| | |
+| --- | --- |
+| `+ UPLOAD` (top bar) | store a document and open a record for it in one step — a document no record points at would be invisible on a deck of conversations |
+| `⌘`/`Ctrl` + select in `DOCUMENT` | mark a passage, give an instruction, and it is rewritten in place — **filed as a new version**, never written over the document, so the change is reviewable as a diff and the text the threads were answered from survives |
+| `⇄ REPLACE` | re-upload into the same slot; the outgoing text is kept as its own version and the snackbar offers `REVIEW CHANGES` |
+| `⇪ FILE AS VERSION` (on any model answer) | file that answer as the next version of the document it rewrote |
+| `✎ RENAME` / `✕ REMOVE` | on the document, and on the record itself (`✎` `✕` in the window chrome) |
+| `⧉ COPY`, `⤓ DOCX`, `⤓ RTF` | the current text, any version, or a single model answer |
+| `✕` on a version | drop one saved state; the rest stay |
+
+Anything that cannot be undone is gated the same way the lab gates it: a dialog
+naming exactly what will go, with the button dead until you type `REMOVE`.
+
+### Talking to a record
+
+The composer is the foot of the front window rather than a bar across the
+console, because what you type goes into *that* conversation and no other. It
+carries the same task presets as the lab and its own model picker, which writes
+to the thread — a record remembers which model answered in it.
+
+| | |
+| --- | --- |
+| type + `Enter` (or `SEND`) | a new turn in the record in front, streamed as it arrives; the status line reports the stage, the reasoning, then the token count |
+| `HALT` | stop mid-answer. What already arrived is kept and marked, so the next question can build on it |
+| `↻ RETRY` | re-run the tail of a record after a failure or a halt — the failed reply is dropped, not stacked under a second one |
+| `✎ EDIT` (on your own turn) | rewrite the question and answer it again; everything after it is discarded, because it answers a question that no longer exists |
+| `☆ SAVE` → `★ SAVED` (top bar) | keep an answer and attach it to any other record as context |
+| `⌕ CHECK` | ask the model to compare that answer against the source document; every difference it names is listed under the turn as a diff. The result is stored, so opening it again costs nothing |
+| `⊞ RECORD` (top bar) | a second conversation on a document already in the library — the same text read twice, without uploading it twice |
+| `⚙ LINK` (top bar) | providers, keys, models and the fallback chain — the same settings screen the lab mounts |
+
+The composer stays on every face of the record, not just its transcript: a
+record with nothing said in it opens on its `DOCUMENT`, and hiding the composer
+there would leave the one window you most want to talk to with no way in.
+Sending turns the record to its transcript by itself.
+
+A turn is not tied to the front of the deck. Walk away from a record mid-answer
+and it keeps running: the server keeps writing it down, and the record has it
+when you come back.
+
+A thread with no messages opens on `DOCUMENT` rather than on an empty page.
+That case is common and used to look broken: uploading a file creates a thread
+whose whole content is the document, and a deck that only rendered messages
+showed nothing at all — while the Oracle, reading the same transcripts, would
+correctly but uselessly report that the archive did not hold the text.
+
+Actions that leave no visible trace — a copy, an export, a search that matched
+nothing, a failed fetch, a deck move the Oracle made — report in a snackbar. On
+a console where every window is translucent and half-lit, silence is
+indistinguishable from breakage. A change filed somewhere you cannot see carries
+the way there: filing a version offers `REVIEW CHANGES`, which lands on the diff
+that change produced.
+
+### Searching it
+
+The query box (`/`) runs full-text search across every message ever written
+**and every document ever uploaded**, not a substring scan: results come back
+ranked, the matching passage quoted, and the deck reorders so the best match is
+the window in front. It reads a Polish archive from a US keyboard — `rozdzial`
+finds `rozdział`, and `bomba` finds `bomby`.
+
+Documents are indexed because otherwise the archive's most findable content is
+invisible: "the long poem" appears in no message, only in an `.rtf` — and the
+thread holding it has no messages to match against at all. A document hit
+surfaces as a hit on the threads bound to that document, ranked just below a
+message hit of the same quality.
+
+### The Oracle
+
+A model that searches the archive on your behalf. It is given a catalogue of
+records and a search tool, and works in rounds:
+
+```
+plan → search the archive → read what came back → plan again → answer
+```
+
+It shows its work while it does it: the queries it chose, the records it opened,
+and, under the answer, the conversations it actually used. Every `[#12]` in an
+answer is a button that flies the deck to that record, and the windows it cited
+are marked in amber. A retrieval answer you cannot audit is just a confident
+guess, so all of it stays on screen.
+
+The rounds are a JSON protocol over plain completions rather than OpenAI
+function calling — a local vLLM build is not guaranteed to have tool support
+compiled in, and a JSON object is the one thing every endpoint can emit. Calls
+are traced like any other (`kind` = `oracle-plan` / `oracle`, `task` = `oracle`),
+so what the Oracle spent is visible in the same place as everything else.
+
+### The search index
+
+`server/search.js` mirrors every message into an FTS5 table kept in sync by
+SQLite triggers, so nothing in the write paths has to remember to update it. It
+indexes the message text, its thread title and its document filename — which is
+what lets "the chapter three rewrite" find a thread whose messages never say
+"chapter three". The index is derived data: if its row count ever disagrees
+with `messages`, it is rebuilt at boot.
+
+Three passes run in order, and the next only runs when the previous found
+nothing: every word (`AND`), any word (`OR`), then a loose pass that truncates
+each word and matches it as a prefix. That last one is what makes an
+inflection-heavy language searchable without a stemmer — and why it runs last,
+since it matches more than it should.
+
+The pass that found a hit travels with it, because the loose pass is a fallback
+for the *whole query* and not for one source of it. Searching `wiersz` finds
+"wierzchu" in three messages by truncation and the actual poem in a document
+exactly: without that rule the three weak hits would sum to more than the one
+right answer and bury it.
+
+Tuning, all optional:
+
+| Variable | Default | What it caps |
+| --- | --- | --- |
+| `ORACLE_MAX_ROUNDS` | `3` | plan/search rounds before the answer is forced |
+| `ORACLE_CATALOGUE` | `120` | threads listed to the planner |
+| `ORACLE_MESSAGE_CHARS` | `1200` | one message inside a transcript |
+| `ORACLE_THREAD_CHARS` | `12000` | one opened conversation |
+| `ORACLE_EVIDENCE_CHARS` | `60000` | all transcripts in one answer |
+| `ORACLE_DOC_CHARS` | `4000` | the document excerpt attached to a thread that has messages |
+| `ORACLE_DOC_ONLY_CHARS` | `16000` | the document attached to a thread that has none — there, the document is the record |
+
 ## Storage
 
 ```
@@ -394,11 +573,14 @@ curl localhost:5173/api/llm/config           # the chain actually in use
 server/
   index.js    REST + SSE routes for documents, threads and messages
   db.js       node:sqlite schema, queries and trace writes
+  search.js   FTS5 index over every message, kept in sync by triggers
+  oracle.js   the /grimoire deck: records, search and retrieval inference
   extract.js  pdfjs + mammoth → text
   llm.js      OpenAI-compatible client (streaming + one-shot)
   tasks.js    prompt templates, conversation and map/reduce builders
   chunk.js    paragraph-aware chunking
 public/       single-page frontend, no build step
+  grimoire/   the alternative view — deck + Oracle, same store, read only
 scripts/
   doctor.mjs  endpoint discovery + smoke test
   tunnel.sh   SSH port-forward to the Spark
@@ -492,5 +674,20 @@ large document, a cache hit shows up as a dramatically lower TTFT on later turns
 | `GET` | `/api/traces/:id` | one trace with full prompt and response |
 | `GET` | `/api/usage` | per-model and global token rollup |
 | `GET` | `/api/threads/:id/usage` | thread total + per-message breakdown |
+| `GET` | `/grimoire` | the deck view |
+| `GET` | `/api/oracle/gallery` | every thread with its stats, one per window |
+| `GET` | `/api/oracle/search?q=&limit=` | full-text search, grouped by thread |
+| `GET` | `/api/oracle/threads/:id` | one conversation to read |
+| `POST` | `/api/oracle/ask` | ask the archive, SSE stream back |
+
+The deck reads and writes through the lab's own endpoints — `/api/documents`
+(upload, replace, rename, remove), `/versions` (list, file, remove), `/diff`,
+`/api/rewrite`, `/api/threads/:id`, `/api/traces` — so the two views can never
+drift apart, and neither can grow a rule the other does not enforce.
 
 SSE event types: `user`, `stage`, `thinking`, `token`, `usage`, `done`, `error`.
+`/api/oracle/ask` adds `thought`, `hits`, `opened` and `sources` — what the
+Oracle searched, read and answered from — plus `navigate` when the instruction
+was to move the deck rather than to ask it something. It accepts an optional
+`deck` object (`position`, `total`, `records`) so relative movement resolves
+against what is actually on screen.

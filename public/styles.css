@@ -1,87 +1,286 @@
+/* ===========================================================================
+   Spark Doc Lab — design tokens
+
+   One warm-neutral surface family, one interactive accent, one spacing scale,
+   one control height. Everything below composes from these, which is what
+   makes the whole app line up: a button in the sidebar, a button in a modal
+   header and a button in the composer are the same object.
+   =========================================================================== */
+
 :root {
-  --bg: #0f1115;
-  --panel: #161a21;
-  --sidebar: #12151b;
-  --line: #262c37;
-  --fg: #e6e9ef;
-  --dim: #8b93a3;
-  --accent: #76b900; /* NVIDIA green, since we're on a Spark */
-  --err: #ff6b6b;
-  --userBubble: #1e2530;
-  --radius: 10px;
+  /* Native widgets — dropdown lists, scrollbars, form controls — follow this. */
+  color-scheme: light;
 
-  /* Diff palette. Green-added / red-removed is the one convention every
-     reader already knows, so it stays red and green even though the rest of
-     the app is NVIDIA green — the accent would read as "added" everywhere. */
-  --diffAdd: rgba(46, 160, 67, .16);
-  --diffAddGutter: rgba(46, 160, 67, .28);
-  --diffAddWord: rgba(46, 160, 67, .42);
-  --diffDel: rgba(248, 81, 73, .13);
-  --diffDelGutter: rgba(248, 81, 73, .24);
-  --diffDelWord: rgba(248, 81, 73, .38);
-  --diffHunkBg: rgba(110, 140, 200, .1);
-  --diffGutterFg: #6f7885;
-  --addFg: #3fb950;
-  --delFg: #f85149;
+  /* Surfaces — warm neutrals rather than blue-greys: paper, not screen. */
+  --bg: #faf9f7;
+  --panel: #ffffff;
+  --sidebar: #f5f4f0;
+  --hover: #f2f1ec;
+  --line: #e8e6e0;
+  --lineStrong: #d7d4cb;
+
+  /* Text */
+  --fg: #1f1e1c;
+  --fgSoft: #45433d;
+  --dim: #78756c;
+
+  /* One accent carries every interactive state. */
+  --accent: #2f6fdd;
+  --accentFg: #ffffff;
+  --accentSoft: rgba(47, 111, 221, .10);
+  --ring: rgba(47, 111, 221, .22);
+
+  /* The Spark nod, kept for the wordmark and the "provider is healthy" dot —
+     green as an accent would collide with green-as-added in every diff. */
+  --brand: #5f9400;
+
+  --err: #c0392f;
+  --errSoft: rgba(192, 57, 47, .08);
+  --warn: #a9701c;
+
+  --userBubble: #f1efe9;
+
+  /* Shape and depth */
+  --radius: 12px;
+  --radiusSm: 8px;
+  --radiusPill: 999px;
+  --shadow: 0 1px 2px rgba(28, 25, 20, .05);
+  --shadowPop: 0 10px 30px rgba(28, 25, 20, .13), 0 1px 3px rgba(28, 25, 20, .08);
+  --shadowSheet: 0 24px 70px rgba(28, 25, 20, .18), 0 2px 10px rgba(28, 25, 20, .06);
+
+  /* Rhythm: every gap and pad in the app is one of these. */
+  --s1: 4px;  --s2: 8px;  --s3: 12px; --s4: 16px;
+  --s5: 20px; --s6: 24px; --s7: 32px;
+
+  /* Every control is this tall, so rows line up without hand-tuning. */
+  --ctl: 32px;
+  --ctlSm: 28px;
+
+  --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
+  --sans: ui-sans-serif, -apple-system, "SF Pro Text", system-ui, sans-serif;
+
+  --chev: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath d='M2.5 4.5 6 8l3.5-3.5' fill='none' stroke='%2378756c' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+
+  /* Diff palette. Green-added / red-removed is the one convention every reader
+     already knows, so it stays red and green whatever the accent is. */
+  --diffAdd: #e9f7ec;
+  --diffAddGutter: #d3efd9;
+  --diffAddWord: #b4e6bf;
+  --diffDel: #fdecea;
+  --diffDelGutter: #f8d7d3;
+  --diffDelWord: #f5c2bd;
+  --diffHunkBg: #f4f3ef;
+  --diffGutterFg: #a3a096;
+  --addFg: #1a7f37;
+  --delFg: #c0392f;
 }
-@media (prefers-color-scheme: light) {
-  :root {
-    --bg: #f6f7f9; --panel: #fff; --sidebar: #f0f2f5; --line: #e2e5ea;
-    --fg: #14171c; --dim: #6b7280; --userBubble: #e8ebf0;
 
-    --diffAdd: #e6ffec; --diffAddGutter: #ccffd8; --diffAddWord: #abf2bc;
-    --diffDel: #ffebe9; --diffDelGutter: #ffd7d5; --diffDelWord: #ffc1c0;
-    --diffHunkBg: #f0f3f6; --diffGutterFg: #8c959f;
-    --addFg: #1a7f37; --delFg: #cf222e;
+@media (prefers-color-scheme: dark) {
+  :root {
+    color-scheme: dark;
+
+    --bg: #131519;
+    --panel: #1a1d23;
+    --sidebar: #16181d;
+    --hover: #22262e;
+    --line: #272b33;
+    --lineStrong: #383d47;
+
+    --fg: #ecedf1;
+    --fgSoft: #c6c9d1;
+    --dim: #8b8f9b;
+
+    --accent: #6ea8ff;
+    --accentFg: #0d1117;
+    --accentSoft: rgba(110, 168, 255, .14);
+    --ring: rgba(110, 168, 255, .28);
+
+    --brand: #8fd400;
+    --err: #ff6b6b;
+    --errSoft: rgba(255, 107, 107, .12);
+    --warn: #d29922;
+
+    --userBubble: #232830;
+
+    --shadow: 0 1px 2px rgba(0, 0, 0, .35);
+    --shadowPop: 0 10px 30px rgba(0, 0, 0, .45), 0 1px 3px rgba(0, 0, 0, .3);
+    --shadowSheet: 0 24px 70px rgba(0, 0, 0, .55), 0 2px 10px rgba(0, 0, 0, .35);
+
+    --chev: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath d='M2.5 4.5 6 8l3.5-3.5' fill='none' stroke='%238b8f9b' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+
+    --diffAdd: rgba(46, 160, 67, .16);
+    --diffAddGutter: rgba(46, 160, 67, .28);
+    --diffAddWord: rgba(46, 160, 67, .42);
+    --diffDel: rgba(248, 81, 73, .13);
+    --diffDelGutter: rgba(248, 81, 73, .24);
+    --diffDelWord: rgba(248, 81, 73, .38);
+    --diffHunkBg: rgba(110, 140, 200, .1);
+    --diffGutterFg: #6f7885;
+    --addFg: #3fb950;
+    --delFg: #f85149;
   }
 }
 
+/* ------------------------------------------------------------------- base */
+
 * { box-sizing: border-box; }
+
 body {
   margin: 0; height: 100vh; display: flex;
   background: var(--bg); color: var(--fg);
-  font: 14px/1.55 ui-sans-serif, -apple-system, "SF Pro Text", system-ui, sans-serif;
+  font: 14px/1.6 var(--sans);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
 }
+
+/* One scrollbar treatment everywhere, so panes read as one surface. */
+* { scrollbar-width: thin; scrollbar-color: var(--lineStrong) transparent; }
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--lineStrong); border: 3px solid transparent; background-clip: content-box; border-radius: var(--radiusPill); }
+::-webkit-scrollbar-thumb:hover { background: var(--dim); background-clip: content-box; }
+
+.hidden { display: none !important; }
+
+/* Section micro-label: the small uppercase key above a group. */
+.lbl {
+  display: block; margin-bottom: var(--s2);
+  font-size: 11px; font-weight: 600; letter-spacing: .07em; text-transform: uppercase;
+  color: var(--dim);
+}
+
+/* --------------------------------------------------------------- controls */
+
+button, select, textarea, input {
+  font-family: inherit;
+}
+
+button, select {
+  height: var(--ctl); padding: 0 var(--s3);
+  display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+  background: var(--panel); color: var(--fgSoft);
+  border: 1px solid var(--line); border-radius: var(--radiusSm);
+  font-size: 13px; font-weight: 500; line-height: 1;
+  cursor: pointer; white-space: nowrap;
+  transition: background .13s ease, border-color .13s ease, color .13s ease;
+}
+button:hover:not(:disabled), select:hover:not(:disabled) {
+  background: var(--hover); border-color: var(--lineStrong); color: var(--fg);
+}
+button:disabled, select:disabled { opacity: .45; cursor: not-allowed; }
+button.small { height: var(--ctlSm); padding: 0 10px; font-size: 12.5px; }
+
+/* An anchor that has to sit in a row of buttons — the Grimoire view is a page,
+   not an action, so it stays a real link (middle-click, open in new tab) and
+   only borrows the shape. */
+a.linkBtn {
+  display: inline-flex; align-items: center;
+  height: var(--ctlSm); padding: 0 10px;
+  font-size: 12.5px; text-decoration: none;
+  color: var(--fgSoft); background: var(--panel);
+  border: 1px solid var(--line); border-radius: var(--radiusSm);
+}
+a.linkBtn:hover { background: var(--hover); border-color: var(--lineStrong); color: var(--fg); }
+
+button.primary {
+  background: var(--accent); border-color: transparent; color: var(--accentFg); font-weight: 600;
+}
+button.primary:hover:not(:disabled) { background: var(--accent); filter: brightness(1.07); border-color: transparent; color: var(--accentFg); }
+
+button.danger:hover:not(:disabled) { border-color: var(--err); color: var(--err); background: var(--errSoft); }
+
+/* Filled red, not a red hover like .danger — this one destroys stored work and
+   should never be mistaken for the button beside it. */
+button.destructive {
+  background: var(--err); border-color: transparent; color: #fff; font-weight: 600;
+}
+button.destructive:hover:not(:disabled) { filter: brightness(1.08); border-color: transparent; color: #fff; }
+
+/* Outlined remove — matches the trash on version rows. */
+button.removeBtn { background: var(--panel); border-color: var(--line); color: var(--err); }
+button.removeBtn:hover:not(:disabled) { background: var(--errSoft); border-color: var(--err); color: var(--err); }
+
+/* A select is a replaced element in some engines, where flex layout on it is
+   undefined — block layout with a matching line-height is the portable way to
+   land its text on the same baseline as the buttons beside it. */
+select {
+  display: inline-block; width: 100%;
+  line-height: calc(var(--ctl) - 2px);
+  appearance: none; -webkit-appearance: none;
+  padding-right: 30px; text-align: left;
+  background-image: var(--chev);
+  background-repeat: no-repeat;
+  background-position: right 10px center;
+}
+.topActions select, .composer select, .editBar select, .compareBar select { width: auto; flex-shrink: 0; }
+
+textarea, input[type="text"] {
+  background: var(--panel); color: var(--fg);
+  border: 1px solid var(--line); border-radius: var(--radiusSm);
+  padding: 8px 11px; font-size: 13.5px; line-height: 1.55;
+  transition: border-color .13s ease, box-shadow .13s ease;
+}
+
+:where(button, select, textarea, input, [tabindex]):focus-visible {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--ring);
+}
+textarea:focus, input[type="text"]:focus {
+  outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--ring);
+}
+
+input[type="checkbox"], input[type="radio"] { accent-color: var(--accent); margin: 0; }
 
 /* ------------------------------------------------------------------ sidebar */
 
 .sidebar {
-  width: 268px; flex-shrink: 0; background: var(--sidebar);
+  width: 284px; flex-shrink: 0; background: var(--sidebar);
   border-right: 1px solid var(--line);
   display: flex; flex-direction: column; min-height: 0;
 }
-.brand { padding: 13px 14px; font-weight: 600; font-size: 14px; border-bottom: 1px solid var(--line); }
 
-.newThread { padding: 12px 12px 10px; border-bottom: 1px solid var(--line); }
-.newThread .row { display: flex; gap: 6px; margin-top: 7px; }
-.newThread .row button { flex: 1; }
+.brand {
+  height: 53px; flex-shrink: 0; display: flex; align-items: center; gap: 8px;
+  padding: 0 var(--s5); border-bottom: 1px solid var(--line);
+  font-size: 14.5px; font-weight: 650; letter-spacing: -.01em;
+}
 
-.lbl { font-size: 11px; color: var(--dim); display: block; margin-bottom: 5px; text-transform: uppercase; letter-spacing: .5px; }
-.threadsLbl { padding: 11px 14px 0; }
+.brandMark { color: var(--brand); font-size: 15px; }
+
+.newThread { padding: var(--s5) var(--s5) var(--s4); border-bottom: 1px solid var(--line); }
+/* Auto columns keep every row's buttons the same width whatever it holds — the
+   three-button rows and the lone Remove row share one edge. */
+.newThread .row {
+  display: grid; grid-auto-flow: column; grid-auto-columns: 1fr;
+  gap: 6px; margin-top: 8px;
+}
+.newThread .row button { width: 100%; padding: 0 6px; }
 
 .docMeta {
-  font: 11px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
-  color: var(--dim); margin-top: 7px; word-break: break-word;
+  margin-top: var(--s3); font: 11px/1.6 var(--mono); color: var(--dim); word-break: break-word;
 }
 .docMeta.error { color: var(--err); }
 
-.threads { flex: 1; overflow-y: auto; padding: 6px 8px 10px; min-height: 0; }
+.threadsLbl { padding: var(--s5) var(--s5) 0; }
+
+.threads { flex: 1; overflow-y: auto; padding: var(--s2) var(--s3) var(--s4); min-height: 0; }
 .thread {
-  padding: 8px 9px; border-radius: 8px; cursor: pointer; margin-bottom: 2px;
-  border: 1px solid transparent;
+  padding: 9px 11px; border-radius: var(--radiusSm); cursor: pointer; margin-bottom: 2px;
+  border: 1px solid transparent; transition: background .13s ease;
 }
-.thread:hover { background: var(--panel); }
-.thread.active { background: var(--panel); border-color: var(--line); }
-.thread .t { font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.thread:hover { background: var(--hover); }
+.thread.active { background: var(--panel); border-color: var(--line); box-shadow: var(--shadow); }
+.thread .t { font-size: 13px; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .thread .s {
-  font: 11px ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--dim);
-  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-top: 2px;
+  margin-top: 3px; font: 11px var(--mono); color: var(--dim);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
-.threads .none { color: var(--dim); font-size: 12px; padding: 10px 9px; }
+.threads .none { color: var(--dim); font-size: 12.5px; padding: var(--s3) 11px; }
 
 .dbStats {
-  padding: 8px 14px; border-top: 1px solid var(--line);
-  font: 10.5px ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--dim);
+  padding: var(--s3) var(--s5); border-top: 1px solid var(--line);
+  font: 10.5px var(--mono); color: var(--dim);
 }
 
 /* --------------------------------------------------------------------- main */
@@ -89,85 +288,124 @@ body {
 .main { flex: 1; display: flex; flex-direction: column; min-width: 0; min-height: 0; }
 
 .topbar {
-  display: flex; align-items: center; justify-content: space-between; gap: 12px;
-  padding: 9px 16px; border-bottom: 1px solid var(--line); background: var(--panel);
+  height: 53px; flex-shrink: 0;
+  display: flex; align-items: center; justify-content: space-between; gap: var(--s4);
+  padding: 0 var(--s5); border-bottom: 1px solid var(--line); background: var(--panel);
 }
-.titleWrap { min-width: 0; }
-.threadTitle { font-size: 13.5px; font-weight: 600; display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.threadDoc { font: 11px ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--dim); }
-.topActions { display: flex; align-items: center; gap: 7px; flex-shrink: 0; }
+.titleWrap { min-width: 0; overflow: hidden; }
+.threadTitle {
+  display: block; font-size: 14px; font-weight: 650; letter-spacing: -.01em;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.threadDoc {
+  display: block; font: 11px var(--mono); color: var(--dim);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+/* Everything in the header is one height. The model picker is a full-size
+   select by default, which left it standing 4px taller than the buttons and
+   chips beside it. */
+.topActions { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
+.topActions select {
+  height: var(--ctlSm); line-height: calc(var(--ctlSm) - 2px);
+  font-size: 12.5px; padding-left: 10px;
+}
 
-.status { font: 11px ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--dim); }
-.status.ok::before  { content: "● "; color: var(--accent); }
-.status.bad::before { content: "● "; color: var(--err); }
+/* The provider pill: a chip, so the header ends on a shape rather than a ragged
+   line of text. It is capped and clipped because its unhappy states carry a
+   whole URL — left to grow, it pushes the thread title out of the header. The
+   full text stays in the tooltip. */
+.status {
+  display: inline-block; max-width: 300px;
+  height: var(--ctlSm); padding: 0 10px;
+  border: 1px solid var(--line); border-radius: var(--radiusPill);
+  background: var(--bg); color: var(--dim);
+  font: 11px var(--mono); line-height: calc(var(--ctlSm) - 2px);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.status::before {
+  content: ""; display: inline-block; vertical-align: middle;
+  width: 6px; height: 6px; margin-right: 7px; margin-top: -1px;
+  border-radius: 50%; background: var(--dim);
+}
+.status.ok::before  { background: var(--brand); }
+.status.bad::before { background: var(--err); }
+.status.bad { color: var(--err); border-color: color-mix(in srgb, var(--err) 35%, var(--line)); }
 
-/* --------------------------------------------------------------- transcript */
+/* ----------------------------------------------------------------- transcript */
 
-.transcript { flex: 1; overflow-y: auto; padding: 18px 22px; min-height: 0; }
-.empty { max-width: 460px; margin: 12vh auto; text-align: center; color: var(--dim); }
-.empty h2 { font-size: 15px; color: var(--fg); margin: 0 0 8px; }
-.empty p { font-size: 13px; margin: 0; }
+.transcript { flex: 1; overflow-y: auto; padding: var(--s7) var(--s6); min-height: 0; }
 
-.msg { max-width: 780px; margin: 0 auto 18px; }
+.empty { max-width: 420px; margin: 14vh auto; text-align: center; color: var(--dim); }
+.empty h2 { font-size: 19px; font-weight: 650; letter-spacing: -.015em; color: var(--fg); margin: 0 0 var(--s2); }
+.empty p { font-size: 13.5px; line-height: 1.7; margin: 0; }
+
+.msg { max-width: 760px; margin: 0 auto var(--s6); }
 .msg .who {
-  font: 11px ui-monospace, SFMono-Regular, Menlo, monospace;
-  color: var(--dim); margin-bottom: 5px;
+  font: 11px var(--mono); color: var(--dim); margin-bottom: 6px;
 }
+.msg .body { font-size: 14.5px; line-height: 1.75; }
+/* The prompt bubble hugs its text — a one-line question should not draw a
+   760px slab across the thread. */
 .msg.user .body {
-  background: var(--userBubble); border-radius: 10px; padding: 9px 12px;
+  display: inline-block; max-width: 100%;
+  background: var(--userBubble); border-radius: var(--radius); padding: 11px 15px;
   white-space: pre-wrap; word-break: break-word;
 }
 .msg.assistant .body { white-space: pre-wrap; word-break: break-word; }
-.msg .body { font-size: 13.5px; }
 .msg.assistant.streaming .body::after {
   content: "▍"; color: var(--accent); animation: blink 1s steps(2) infinite;
 }
 @keyframes blink { 50% { opacity: 0; } }
-.msg .err { color: var(--err); font-size: 12px; margin-top: 5px; }
+.msg .err { color: var(--err); font-size: 12.5px; margin-top: 6px; }
+
+.msg .cost { margin-top: 6px; font: 10.5px var(--mono); color: var(--dim); }
+
+/* A turn the main provider refused and a fallback picked up. Not an error —
+   the answer below it is real — so it is marked, not painted red. */
+.msg .fallbackNote {
+  margin-bottom: 6px; font: 11px var(--mono); color: var(--warn); word-break: break-word;
+}
 
 /* --- per-message controls: copy / edit, plus retry on a turn that failed --- */
-.acts { display: flex; align-items: center; gap: 6px; margin-top: 5px; }
+.acts { display: flex; align-items: center; gap: 4px; margin-top: var(--s2); flex-wrap: wrap; }
 .acts button.act {
-  padding: 3px 7px; font-size: 11px; line-height: 1.5;
-  background: none; border-color: transparent; color: var(--dim);
-  opacity: 0; transition: opacity .12s;
+  height: var(--ctlSm); padding: 0 8px; font-size: 11.5px; font-weight: 500;
+  background: transparent; border-color: transparent; color: var(--dim);
+  opacity: 0; transition: opacity .13s ease, background .13s ease, color .13s ease;
 }
 .msg:hover .acts button.act,
 .acts button.act:focus-visible { opacity: 1; }
-.acts button.act:hover:not(:disabled) { color: var(--fg); border-color: var(--line); }
+.acts button.act:hover:not(:disabled) { background: var(--hover); border-color: var(--line); color: var(--fg); }
 /* Retry is the whole point of a failed turn — never make the user hunt for it. */
-.acts button.act.retry { opacity: 1; color: var(--accent); border-color: var(--line); }
-/* A saved response stays visibly marked, not just hover-revealed like the rest. */
-.acts button.act.saved { opacity: 1; color: var(--accent); border-color: var(--line); }
-/* A completed ground-truth check stays visibly marked, not just hover-revealed. */
+.acts button.act.retry { opacity: 1; color: var(--accent); border-color: var(--line); background: var(--accentSoft); }
+/* A saved response and a finished ground-truth check stay visibly marked
+   rather than hover-revealed like the rest. */
+.acts button.act.saved,
 .acts button.act.checked { opacity: 1; color: var(--accent); border-color: var(--line); }
 /* `.acts button.act` outranks the generic `button.primary`, so restate it. */
 .acts button.act.primary {
-  opacity: 1; background: var(--accent); border-color: var(--accent);
-  color: #0b0e11; font-weight: 600;
+  opacity: 1; background: var(--accent); border-color: transparent;
+  color: var(--accentFg); font-weight: 600;
 }
 
-.editWrap { margin-top: 6px; }
+.editWrap { margin-top: var(--s2); }
 .editBox {
-  width: 100%; min-height: 72px; resize: vertical;
-  background: var(--panel); color: var(--fg);
-  border: 1px solid var(--line); border-radius: 10px; padding: 9px 12px;
-  font: inherit; font-size: 13.5px; line-height: 1.5;
+  width: 100%; min-height: 84px; resize: vertical;
+  border-radius: var(--radius); padding: 11px 14px; font-size: 14px;
 }
-.editBox:focus { outline: none; border-color: var(--accent); }
-.editBar { display: flex; align-items: center; gap: 8px; margin-top: 6px; flex-wrap: wrap; }
-.editModel { padding: 4px 7px; font-size: 11px; }
-.editNote { font-size: 11px; color: var(--dim); }
+.editBar { display: flex; align-items: center; gap: var(--s2); margin-top: var(--s2); flex-wrap: wrap; }
+.editModel { height: var(--ctlSm); font-size: 12px; }
+.editNote { font-size: 11.5px; color: var(--dim); }
 
 /* --- reasoning panel (streams `reasoning_content` from ds4-high / ds4-max) --- */
 .think {
-  border: 1px solid var(--line); border-radius: 8px;
-  background: var(--panel); margin-bottom: 8px;
+  border: 1px solid var(--line); border-radius: var(--radiusSm);
+  background: var(--panel); margin-bottom: var(--s3); overflow: hidden;
 }
 .think > summary {
-  cursor: pointer; padding: 6px 10px; list-style: none;
-  font: 11.5px ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--dim);
-  display: flex; align-items: center; gap: 6px;
+  cursor: pointer; padding: 7px 11px; list-style: none;
+  font: 11.5px var(--mono); color: var(--dim);
+  display: flex; align-items: center; gap: 7px;
 }
 .think > summary::-webkit-details-marker { display: none; }
 .think > summary::before { content: "▸"; transition: transform .15s; display: inline-block; }
@@ -179,126 +417,105 @@ body {
 }
 @keyframes pulse { 50% { opacity: .25; } }
 .thinkBody {
-  margin: 0; padding: 8px 10px 10px; max-height: 190px; overflow: auto;
-  font: 11.5px/1.55 ui-monospace, SFMono-Regular, Menlo, monospace;
-  color: var(--dim); white-space: pre-wrap; word-break: break-word;
-  border-top: 1px solid var(--line);
+  margin: 0; padding: var(--s3); max-height: 200px; overflow: auto;
+  font: 11.5px/1.6 var(--mono); color: var(--dim);
+  white-space: pre-wrap; word-break: break-word;
+  border-top: 1px solid var(--line); background: var(--bg);
 }
 
-/* ----------------------------------------------------------------- composer */
+/* ------------------------------------------------------------------ composer */
 
+/* The stage line and the composer share the transcript's column, so the input
+   sits directly under the answers instead of running the window's full width. */
 .stage {
-  font: 11.5px ui-monospace, SFMono-Regular, Menlo, monospace;
-  color: var(--dim); padding: 0 22px; min-height: 17px;
+  width: 100%; max-width: calc(760px + var(--s6) * 2); margin: 0 auto;
+  padding: 0 var(--s6); min-height: 18px;
+  font: 11.5px var(--mono); color: var(--dim);
 }
 .stage.error { color: var(--err); }
 
+.composerWrap { border-top: 1px solid var(--line); }
 .composer {
-  display: flex; gap: 7px; align-items: flex-end;
-  padding: 10px 22px 14px; border-top: 1px solid var(--line);
+  display: flex; gap: var(--s2); align-items: flex-end;
+  width: 100%; max-width: calc(760px + var(--s6) * 2); margin: 0 auto;
+  padding: var(--s3) var(--s6) var(--s5);
 }
+/* Matched to the textarea's resting height so the row reads as one control
+   rather than three of slightly different sizes. */
+.composer select { height: 42px; line-height: 40px; }
+.composer button { height: 42px; padding: 0 var(--s4); }
 .composer textarea {
   flex: 1; min-width: 0; resize: none; max-height: 180px; min-height: 38px;
-  background: var(--panel); color: var(--fg);
-  border: 1px solid var(--line); border-radius: 9px; padding: 9px 11px;
-  font: 13.5px/1.5 inherit; font-family: inherit;
+  border-radius: var(--radius); padding: 9px 13px; font-size: 14px;
+  box-shadow: var(--shadow);
 }
-.composer textarea:focus { outline: none; border-color: var(--dim); }
 
-/* -------------------------------------------------------------------- forms */
+/* ------------------------------------------------------------- modal sheets */
 
-select, button {
-  background: var(--panel); color: var(--fg);
-  border: 1px solid var(--line); border-radius: 8px;
-  padding: 7px 10px; font-size: 12.5px; cursor: pointer;
+.overlay {
+  position: fixed; inset: 0; z-index: 50;
+  background: rgba(28, 25, 20, .38);
+  backdrop-filter: blur(2px);
+  display: flex; align-items: center; justify-content: center; padding: 4vh 4vw;
 }
-select { width: 100%; }
-.topActions select, .composer select, .editBar select { width: auto; flex-shrink: 0; }
-button:hover:not(:disabled) { border-color: var(--dim); }
-button:disabled { opacity: .45; cursor: not-allowed; }
-button.small { padding: 6px 9px; font-size: 12px; }
-button.primary { background: var(--accent); border-color: var(--accent); color: #0b0e11; font-weight: 600; }
-button.danger:hover:not(:disabled) { border-color: var(--err); color: var(--err); }
-/* Filled red, not a red hover like .danger — this one destroys stored work, and
-   should never be mistaken for the button next to it. */
-button.destructive {
-  background: var(--err); border-color: var(--err); color: #2a0808; font-weight: 600;
+.sheet {
+  background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius);
+  width: min(1100px, 100%); max-height: 92vh; display: flex; flex-direction: column;
+  overflow: hidden; box-shadow: var(--shadowSheet);
 }
-button.destructive:hover:not(:disabled) { border-color: var(--err); filter: brightness(1.08); }
-/* Red-outlined remove button — matches the trash icon used on version rows. */
-button.removeBtn {
-  background: none; border-color: var(--err); color: var(--err);
-  opacity: .75;
+/* The versions modal is a full-width review surface — near-edge to near-edge. */
+.versionsSheet { width: min(1500px, 100%); }
+
+.sheetTop {
+  flex-shrink: 0; min-height: 56px;
+  display: flex; align-items: center; justify-content: space-between; gap: var(--s4);
+  padding: var(--s3) var(--s5); border-bottom: 1px solid var(--line);
 }
-button.removeBtn:hover:not(:disabled) { opacity: 1; filter: brightness(1.1); }
-
-.hidden { display: none !important; }
-
-@media (max-width: 800px) {
-  .sidebar { width: 210px; }
-  .transcript { padding: 14px; }
-  .composer { padding: 10px 14px 12px; }
+.sheetTop > strong { font-size: 15px; font-weight: 650; letter-spacing: -.01em; }
+.sheetActions { display: flex; align-items: center; gap: var(--s2); }
+.scopeLbl {
+  display: flex; align-items: center; gap: 7px; cursor: pointer;
+  font-size: 12.5px; color: var(--dim);
 }
 
 /* --------------------------------------------------------------- tracing UI */
 
+/* The thread's token count is a reading, not a control — a plain chip keeps it
+   on the header's baseline without pretending to be another button. */
 .usage {
-  font: 11px ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--dim);
-  white-space: nowrap;
+  display: inline-block; height: var(--ctlSm); padding: 0 10px;
+  border-radius: var(--radiusPill); background: var(--bg);
+  font: 11px var(--mono); line-height: var(--ctlSm); color: var(--dim); white-space: nowrap;
 }
-.msg .cost {
-  font: 10.5px ui-monospace, SFMono-Regular, Menlo, monospace;
-  color: var(--dim); margin-top: 4px; opacity: .8;
-}
-/* A turn that the main provider refused and a fallback picked up. Not an error
-   — the answer below it is real — so it is marked, not painted red. */
-.msg .fallbackNote {
-  font: 11px ui-monospace, SFMono-Regular, Menlo, monospace;
-  color: #d29922; margin-bottom: 5px; word-break: break-word;
-}
-
-.overlay {
-  position: fixed; inset: 0; background: rgba(0,0,0,.5);
-  display: flex; align-items: center; justify-content: center; z-index: 50; padding: 3vh 3vw;
-}
-.sheet {
-  background: var(--bg); border: 1px solid var(--line); border-radius: 12px;
-  width: min(1100px, 100%); max-height: 94vh; display: flex; flex-direction: column;
-  overflow: hidden;
-}
-/* The versions modal is a full-width review surface — near-edge to near-edge. */
-.versionsSheet { width: min(98vw, 100%); }
-.sheetTop {
-  display: flex; align-items: center; justify-content: space-between; gap: 12px;
-  padding: 11px 15px; border-bottom: 1px solid var(--line); background: var(--panel);
-}
-.sheetActions { display: flex; align-items: center; gap: 10px; }
-.scopeLbl { font-size: 12px; color: var(--dim); display: flex; align-items: center; gap: 5px; cursor: pointer; }
+.usage:empty { display: none; }
 
 .totals {
-  padding: 10px 15px; border-bottom: 1px solid var(--line);
-  font: 11.5px/1.7 ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--dim);
+  padding: var(--s3) var(--s5); border-bottom: 1px solid var(--line); background: var(--bg);
+  font: 11.5px/1.75 var(--mono); color: var(--dim);
 }
 .totals table { border-collapse: collapse; width: 100%; }
-.totals th, .totals td { text-align: right; padding: 2px 10px 2px 0; }
+.totals th, .totals td { text-align: right; padding: 3px 12px 3px 0; }
 .totals th:first-child, .totals td:first-child { text-align: left; }
 .totals th { color: var(--fg); font-weight: 600; border-bottom: 1px solid var(--line); }
 
-.traceList { overflow-y: auto; padding: 8px 15px 15px; }
+.traceList, .diffList { overflow-y: auto; padding: var(--s3) var(--s5) var(--s5); }
+
 .traceRow {
-  border: 1px solid var(--line); border-radius: 8px; margin-bottom: 6px; background: var(--panel);
+  border: 1px solid var(--line); border-radius: var(--radiusSm);
+  margin-bottom: 6px; background: var(--panel);
 }
 .traceRow > summary {
-  cursor: pointer; list-style: none; padding: 8px 11px;
-  font: 11.5px ui-monospace, SFMono-Regular, Menlo, monospace;
-  display: flex; gap: 12px; flex-wrap: wrap; align-items: center;
+  cursor: pointer; list-style: none; padding: 9px 12px;
+  font: 11.5px var(--mono);
+  display: flex; gap: var(--s3); flex-wrap: wrap; align-items: center;
 }
 .traceRow > summary::-webkit-details-marker { display: none; }
 .traceRow > summary::before { content: "▸"; display: inline-block; transition: transform .15s; color: var(--dim); }
 .traceRow[open] > summary::before { transform: rotate(90deg); }
+.traceRow:hover { border-color: var(--lineStrong); }
 .traceRow .k { color: var(--accent); }
 .traceRow .d { color: var(--dim); }
-.traceRow.bad { border-color: var(--err); }
+.traceRow.bad { border-color: color-mix(in srgb, var(--err) 40%, var(--line)); background: var(--errSoft); }
 .traceRow.bad .k { color: var(--err); }
 /* The call outlived its message — retried, edited away, or stopped. It still
    happened, so it reads as a note rather than a fault. */
@@ -308,57 +525,66 @@ button.removeBtn:hover:not(:disabled) { opacity: 1; filter: brightness(1.1); }
 }
 .traceRow.bad .k.detached { color: var(--dim); }
 
-.traceDetail { padding: 0 11px 11px; border-top: 1px solid var(--line); }
+.traceDetail { padding: 0 12px 12px; border-top: 1px solid var(--line); }
 .traceDetail h4 {
-  font: 11px ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--dim);
-  margin: 11px 0 5px; text-transform: uppercase; letter-spacing: .4px;
+  margin: var(--s3) 0 6px;
+  font: 11px var(--mono); color: var(--dim); text-transform: uppercase; letter-spacing: .06em;
 }
 .traceDetail pre {
-  margin: 0; padding: 9px 10px; background: var(--bg);
-  border: 1px solid var(--line); border-radius: 7px; max-height: 260px; overflow: auto;
-  font: 11.5px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
-  white-space: pre-wrap; word-break: break-word;
+  margin: 0; padding: 10px 12px; background: var(--bg);
+  border: 1px solid var(--line); border-radius: var(--radiusSm);
+  max-height: 260px; overflow: auto;
+  font: 11.5px/1.6 var(--mono); white-space: pre-wrap; word-break: break-word;
 }
 .traceDetail .role { color: var(--accent); }
 
+/* --- saved responses --- */
+.savedFirstLine { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.savedBody {
+  margin: 0 12px 12px; padding: 10px 12px; background: var(--bg);
+  border: 1px solid var(--line); border-radius: var(--radiusSm);
+  font: 13px/1.7 var(--sans); white-space: pre-wrap; word-break: break-word;
+  max-height: 320px; overflow: auto;
+}
+.savedCheck { flex-shrink: 0; }
+.savedRemove { margin-left: auto; }
+
 /* ------------------------------------------------ diff, in GitHub's grammar */
 
-.diffList { overflow-y: auto; padding: 8px 15px 15px; }
-
 .diffFile {
-  border: 1px solid var(--line); border-radius: 8px; overflow: hidden;
-  background: var(--bg); margin-bottom: 10px;
+  border: 1px solid var(--line); border-radius: var(--radiusSm); overflow: hidden;
+  background: var(--panel); margin-bottom: var(--s3);
 }
 .diffFileHead {
-  display: flex; align-items: center; gap: 10px; padding: 8px 11px;
-  background: var(--panel); border-bottom: 1px solid var(--line);
-  font: 11.5px ui-monospace, SFMono-Regular, Menlo, monospace;
+  display: flex; align-items: center; gap: var(--s3); padding: 9px 12px;
+  background: var(--bg); border-bottom: 1px solid var(--line);
+  font: 11.5px var(--mono);
 }
 .diffFileName { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.diffStat { font: 11.5px ui-monospace, SFMono-Regular, Menlo, monospace; display: flex; gap: 7px; }
+.diffStat { font: 11.5px var(--mono); display: inline-flex; gap: 8px; }
 .diffStat .add { color: var(--addFg); }
 .diffStat .del { color: var(--delFg); }
 
 .diffTable {
   width: 100%; border-collapse: collapse; table-layout: fixed;
-  font: 12px/1.55 ui-monospace, SFMono-Regular, Menlo, monospace;
+  font: 12px/1.6 var(--mono);
 }
 .diffTable td { vertical-align: top; }
 .dHunkHead td {
   background: var(--diffHunkBg); color: var(--dim);
-  padding: 3px 11px; font-size: 11.5px;
+  padding: 4px 12px; font-size: 11.5px;
   border-top: 1px solid var(--line); border-bottom: 1px solid var(--line);
 }
 .diffTable tr:first-child .dHunkHead td, .diffTable tr:first-child td { border-top: 0; }
 /* Two gutters, old line then new — a line that only exists on one side leaves
    the other blank, which is what makes an insert legible at a glance. */
 .dLn {
-  width: 48px; text-align: right; padding: 1px 8px;
+  width: 52px; text-align: right; padding: 1px 10px;
   color: var(--diffGutterFg); user-select: none; -webkit-user-select: none;
   border-right: 1px solid var(--line);
 }
-.dCode { padding: 1px 11px 1px 8px; white-space: pre-wrap; word-break: break-word; }
-.dMark { display: inline-block; width: 1ch; margin-right: 7px; color: var(--diffGutterFg); }
+.dCode { padding: 1px 12px 1px 9px; white-space: pre-wrap; word-break: break-word; }
+.dMark { display: inline-block; width: 1ch; margin-right: 8px; color: var(--diffGutterFg); }
 
 tr.dAdd .dCode { background: var(--diffAdd); }
 tr.dAdd .dLn   { background: var(--diffAddGutter); }
@@ -375,7 +601,7 @@ tr.dDel .wch { background: var(--diffDelWord); }
 /* Findings-style diffs (ground truth) have no line numbers to show. */
 .diffTable.noGutter .dLn { display: none; }
 
-/* --- GitHub-style split view: original left, changed right, one row per pair --- */
+/* --- split view: original left, changed right, one row per pair --- */
 .diffTable.split { table-layout: fixed; }
 .diffTable.split td { width: 25%; }
 .diffTable.split .dCode { white-space: pre-wrap; word-break: break-word; }
@@ -387,173 +613,191 @@ tr.dDel .wch { background: var(--diffDelWord); }
 .diffTable.split tr.dDel .dCode:last-of-type,
 .diffTable.split tr.dAdd .dCode:first-of-type { background: transparent; }
 
-/* --- version toolbar buttons --- */
-.sheetActions .diffStat { margin-right: 4px; }
-.sheetActions button.small { white-space: nowrap; }
+.diffNote {
+  padding: 8px 12px; font-size: 11.5px; color: var(--dim);
+  background: var(--bg); border-bottom: 1px solid var(--line);
+}
+.diffEmpty { color: var(--dim); font-size: 13px; padding: var(--s5) var(--s1); }
+
+/* ------------------------------------------------------------ doc versions */
+
+.versionsBody { display: flex; flex: 1; min-height: 0; }
+
+.versionList {
+  width: 252px; flex-shrink: 0; overflow-y: auto;
+  border-right: 1px solid var(--line); padding: var(--s3); background: var(--bg);
+}
+/* One row = one saved state: number and badge on the first line, the numbers
+   underneath, the trash out of the way until the row is under the cursor. */
+.versionRow {
+  position: relative; display: block;
+  padding: 10px 12px; margin-bottom: 4px;
+  border: 1px solid transparent; border-radius: var(--radiusSm);
+  cursor: pointer; transition: background .13s ease, border-color .13s ease;
+}
+.versionRow:hover { background: var(--hover); }
+.versionRow.active { background: var(--panel); border-color: var(--line); box-shadow: var(--shadow); }
+.versionRow .v {
+  display: flex; align-items: center; gap: 7px;
+  font-size: 13px; font-weight: 650; letter-spacing: -.01em;
+}
+.versionRow .tag {
+  font: 10px var(--mono); font-weight: 500; text-transform: uppercase; letter-spacing: .04em;
+  color: var(--accent); background: var(--accentSoft);
+  border-radius: var(--radiusPill); padding: 1px 7px;
+}
+.versionRow .s { margin-top: 3px; font: 11px/1.6 var(--mono); color: var(--dim); }
+.versionRow .s .add { color: var(--addFg); }
+.versionRow .s .del { color: var(--delFg); }
+.versionRow .versionTrash {
+  position: absolute; top: 8px; right: 8px;
+  width: 26px; height: 26px; padding: 0; font-size: 12px;
+  background: var(--panel); border: 1px solid var(--line); border-radius: 6px;
+  color: var(--dim); opacity: 0; transition: opacity .13s ease, color .13s ease, border-color .13s ease;
+}
+.versionRow:hover .versionTrash { opacity: 1; }
+.versionRow .versionTrash:hover { color: var(--err); border-color: var(--err); background: var(--errSoft); }
+.versionRow .versionTrash:focus-visible { opacity: 1; }
+
+.diffPane { flex: 1; display: flex; flex-direction: column; min-width: 0; min-height: 0; }
+
+.compareBar {
+  display: flex; align-items: center; gap: var(--s2); flex-wrap: wrap;
+  padding: var(--s3) var(--s5); border-bottom: 1px solid var(--line); background: var(--panel);
+}
+.compareBar select { max-width: 240px; }
+.compareLbl, .compareArrow { font-size: 12.5px; color: var(--dim); }
+.compareLbl { font-weight: 500; }
+.diffMode { display: inline-flex; align-items: center; gap: var(--s3); margin-left: auto; }
+.diffMode label { display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; color: var(--dim); cursor: pointer; }
 
 /* --- exports, one group per diff side ---
    The bar spans the diff, so each group sits over the column it exports: the
    old text on the left, the changed text on the right, both named by version
-   number and tinted the same red/green the columns are. */
+   number and tinted the red/green their column is. */
 .exportBar {
   display: flex; align-items: center; justify-content: space-between;
-  gap: 12px; flex-wrap: wrap;
-  padding: 7px 12px; border-bottom: 1px solid var(--line); background: var(--bg);
+  gap: var(--s3); flex-wrap: wrap;
+  padding: var(--s2) var(--s5); border-bottom: 1px solid var(--line); background: var(--bg);
 }
 .exportSide {
   display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
-  padding: 3px 8px; border-radius: 8px; border: 1px solid var(--line);
+  padding: 5px; border-radius: var(--radiusSm);
+  border: 1px solid var(--line); background: var(--panel);
 }
 .exportSide.old { border-left: 3px solid var(--delFg); }
 .exportSide.new { border-right: 3px solid var(--addFg); }
-.exportSide button.small { padding: 4px 8px; font-size: 11.5px; white-space: nowrap; }
+.exportSide button.small { height: var(--ctlSm); padding: 0 9px; font-size: 11.5px; }
 .exportWho {
-  display: flex; align-items: baseline; gap: 6px;
-  font: 11.5px ui-monospace, SFMono-Regular, Menlo, monospace;
-  padding: 0 4px;
+  display: inline-flex; align-items: baseline; gap: 6px; padding: 0 6px;
+  font: 11.5px var(--mono);
 }
 .exportSide.old .exportVer { color: var(--delFg); }
 .exportSide.new .exportVer { color: var(--addFg); }
 .sideHint { color: var(--dim); font-size: 10.5px; }
 
-@media (max-width: 900px) {
-  .exportBar { justify-content: flex-start; }
-}
-
-/* --- Ctrl+select inline rewrite popup --- */
-.rewritePopup {
-  position: fixed; z-index: 100; display: flex; align-items: center; gap: 8px;
-  background: var(--panel); border: 1px solid var(--line); border-radius: 10px;
-  padding: 8px 10px; box-shadow: 0 6px 24px rgba(0,0,0,.35);
-  font-size: 12.5px;
-}
-.rewriteLbl { color: var(--dim); white-space: nowrap; }
-.rewriteInstr {
-  width: 240px; background: var(--bg); color: var(--fg);
-  border: 1px solid var(--line); border-radius: 7px; padding: 5px 8px;
-  font: inherit; font-size: 12px;
-}
-.rewriteInstr:focus { outline: none; border-color: var(--accent); }
-
-/* --- snackbars (bottom-center toasts) --- */
-.snackbar {
-  position: fixed; left: 50%; bottom: 28px; transform: translate(-50%, 16px);
-  z-index: 200; max-width: min(480px, calc(100vw - 32px));
-  padding: 10px 18px; border-radius: 10px; font-size: 13px; font-weight: 500;
-  color: var(--fg); background: var(--panel);
-  border: 1px solid var(--line); box-shadow: 0 8px 30px rgba(0,0,0,.4);
-  opacity: 0; pointer-events: none;
-  transition: opacity .22s ease, transform .22s ease;
-}
-.snackbar.show { opacity: 1; transform: translate(-50%, 0); }
-.snackbar.success { border-color: var(--addFg); }
-.snackbar.success::before { content: '✓ '; color: var(--addFg); }
-.snackbar.error { border-color: var(--err); }
-.snackbar.error::before { content: '✕ '; color: var(--err); }
-
-/* A toast that offers an action has to be clickable — the plain ones stay
-   transparent to the mouse so they never swallow a click on the page. */
-.snackbar { display: flex; align-items: center; gap: 12px; }
-.snackbar.withAction { pointer-events: auto; }
-.snackAction {
-  flex-shrink: 0; padding: 4px 10px; font-size: 12px; font-weight: 600;
-  background: transparent; color: var(--accent); border: 1px solid var(--accent);
-  border-radius: 7px; cursor: pointer;
-}
-.snackAction:hover { background: var(--accent); color: #0b0e11; }
-
-.diffNote {
-  padding: 7px 11px; font-size: 11.5px; color: var(--dim);
-  background: var(--panel); border-bottom: 1px solid var(--line);
-}
-.diffEmpty { color: var(--dim); font-size: 12.5px; padding: 14px 4px; }
-
-/* ------------------------------------------------------------ doc versions */
-
-.versionsBody { display: flex; flex: 1; min-height: 0; }
-.versionList {
-  width: 236px; flex-shrink: 0; overflow-y: auto;
-  border-right: 1px solid var(--line); padding: 8px;
-}
-.versionRow {
-  padding: 7px 9px; border-radius: 8px; cursor: pointer;
-  border: 1px solid transparent; margin-bottom: 3px;
-  display: flex; align-items: center; gap: 8px;
-}
-.versionRow:hover { background: var(--panel); }
-.versionRow.active { background: var(--panel); border-color: var(--line); }
-.versionRow .v { font-size: 12.5px; font-weight: 600; display: flex; align-items: center; gap: 6px; }
-.versionRow .tag {
-  font: 10px ui-monospace, SFMono-Regular, Menlo, monospace; font-weight: 400;
-  color: var(--accent); border: 1px solid var(--line); border-radius: 4px; padding: 0 4px;
-}
-.versionRow .s {
-  font: 10.5px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
-  color: var(--dim); margin-top: 2px;
-}
-.versionRow .s .add { color: var(--addFg); }
-.versionRow .s .del { color: var(--delFg); }
-.versionRow .versionTrash {
-  margin-left: auto; flex-shrink: 0; padding: 3px 6px; font-size: 12px;
-  background: none; border: 1px solid var(--err); border-radius: 6px;
-  color: var(--err); cursor: pointer; line-height: 1;
-  opacity: .75;
-}
-.versionRow .versionTrash:hover {
-  opacity: 1; filter: brightness(1.1);
-}
-
-.diffPane { flex: 1; display: flex; flex-direction: column; min-width: 0; min-height: 0; }
-.compareBar {
-  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
-  padding: 9px 12px; border-bottom: 1px solid var(--line); background: var(--panel);
-}
-.compareBar select { width: auto; max-width: 230px; }
-.compareLbl, .compareArrow { font-size: 12px; color: var(--dim); }
-.diffView { flex: 1; overflow: auto; padding: 10px 12px 14px; min-height: 0; }
-
-@media (max-width: 800px) {
-  .versionList { width: 150px; }
-}
+.diffView { flex: 1; overflow: auto; padding: var(--s4) var(--s5) var(--s5); min-height: 0; }
 
 /* ---------------------------------------------------------------- preview */
 
 .previewSheet { width: min(1000px, 100%); }
-.previewBody { flex: 1; min-height: 0; overflow: auto; display: flex; flex-direction: column; }
+.previewBody { flex: 1; min-height: 0; overflow: auto; display: flex; flex-direction: column; background: var(--bg); }
 .previewFrame { flex: 1; width: 100%; border: 0; min-height: 60vh; }
 .previewText {
-  margin: 0; padding: 16px 18px; flex: 1;
-  font: 13px/1.7 ui-monospace, SFMono-Regular, Menlo, monospace;
+  margin: 0; padding: var(--s6) var(--s7); flex: 1;
+  font: 14px/1.85 var(--sans); color: var(--fg);
   white-space: pre-wrap; word-break: break-word;
 }
 
 /* --------------------------------------------- type-the-word confirm dialog */
 
-.confirmSheet { width: min(460px, 100%); }
-.confirmBody { padding: 14px 15px 16px; }
-.confirmWarn { color: var(--err); font-size: 13px; font-weight: 600; margin: 0 0 8px; }
-.confirmWhat { font-size: 13px; margin: 0 0 14px; }
-.confirmLbl { display: block; font-size: 12.5px; color: var(--dim); margin-bottom: 6px; }
+.confirmSheet { width: min(480px, 100%); }
+.confirmBody { padding: var(--s5); }
+.confirmWarn {
+  display: flex; align-items: center; gap: 8px; margin: 0 0 var(--s3);
+  padding: 9px 12px; border-radius: var(--radiusSm);
+  background: var(--errSoft); color: var(--err); font-size: 13px; font-weight: 600;
+}
+.confirmWhat { font-size: 13.5px; line-height: 1.65; margin: 0 0 var(--s5); color: var(--fgSoft); }
+.confirmLbl { display: block; font-size: 12.5px; color: var(--dim); margin-bottom: 7px; }
 .confirmLbl code {
-  font: 12px ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--fg);
-  background: var(--panel); border: 1px solid var(--line); border-radius: 4px; padding: 1px 5px;
+  font: 12px var(--mono); color: var(--fg);
+  background: var(--bg); border: 1px solid var(--line); border-radius: 4px; padding: 1px 5px;
 }
 .confirmInput {
   width: 100%; background: var(--panel); color: var(--fg);
-  border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px;
-  font: 13px ui-monospace, SFMono-Regular, Menlo, monospace; letter-spacing: .06em;
+  border: 1px solid var(--line); border-radius: var(--radiusSm); padding: 9px 12px;
+  font: 13px var(--mono); letter-spacing: .06em;
 }
-.confirmInput:focus { outline: none; border-color: var(--err); }
-.confirmError { color: var(--err); font-size: 12px; margin-top: 8px; }
-.confirmError:empty { display: none; }
-.confirmActions { display: flex; gap: 8px; margin-top: 14px; }
+.confirmInput:focus { outline: none; border-color: var(--err); box-shadow: 0 0 0 3px var(--errSoft); }
+/* The rename dialog's field — an ordinary text input, full width of the sheet. */
+.promptInput { width: 100%; font-size: 13.5px; }
 
-.savedFirstLine {
-  flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+.confirmError { color: var(--err); font-size: 12.5px; margin-top: var(--s2); }
+.confirmError:empty { display: none; }
+/* Actions sit at the trailing edge, cancel first — the destructive one is the
+   last thing under the thumb, not the first. */
+.confirmActions { display: flex; justify-content: flex-end; gap: var(--s2); margin-top: var(--s5); }
+
+/* --------------------------------------- Ctrl+select inline rewrite popup */
+
+.rewritePopup {
+  position: fixed; z-index: 100; display: flex; align-items: center; gap: var(--s2);
+  background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius);
+  padding: var(--s2) var(--s3); box-shadow: var(--shadowPop);
+  font-size: 12.5px;
 }
-.savedBody {
-  margin: 0 11px 11px; padding: 9px 10px; background: var(--bg);
-  border: 1px solid var(--line); border-radius: 7px;
-  font: 12.5px/1.6 ui-sans-serif, -apple-system, system-ui, sans-serif;
-  white-space: pre-wrap; word-break: break-word; max-height: 320px; overflow: auto;
+.rewriteLbl { color: var(--dim); white-space: nowrap; }
+.rewriteInstr {
+  width: 260px; background: var(--bg); color: var(--fg);
+  border: 1px solid var(--line); border-radius: var(--radiusSm); padding: 6px 10px;
+  font: 12.5px var(--sans);
+}
+.rewritePopup button { height: var(--ctlSm); }
+
+/* --------------------------------------------- snackbars (bottom-centre) */
+
+.snackbar {
+  position: fixed; left: 50%; bottom: var(--s7); transform: translate(-50%, 14px);
+  z-index: 200; max-width: min(520px, calc(100vw - 32px));
+  display: flex; align-items: center; gap: var(--s3);
+  padding: 11px var(--s4); border-radius: var(--radius);
+  font-size: 13px; font-weight: 500; color: var(--fg); background: var(--panel);
+  border: 1px solid var(--line); box-shadow: var(--shadowPop);
+  opacity: 0; pointer-events: none;
+  transition: opacity .22s ease, transform .22s ease;
+}
+.snackbar.show { opacity: 1; transform: translate(-50%, 0); }
+.snackbar::before { flex-shrink: 0; font-weight: 700; }
+.snackbar.success { border-color: color-mix(in srgb, var(--addFg) 35%, var(--line)); }
+.snackbar.success::before { content: '✓'; color: var(--addFg); }
+.snackbar.error { border-color: color-mix(in srgb, var(--err) 35%, var(--line)); }
+.snackbar.error::before { content: '✕'; color: var(--err); }
+/* A toast offering an action has to be clickable; the plain ones stay
+   transparent to the mouse so they never swallow a click on the page. */
+.snackbar.withAction { pointer-events: auto; }
+.snackText { flex: 1; min-width: 0; }
+.snackAction {
+  flex-shrink: 0; height: var(--ctlSm); padding: 0 11px;
+  background: var(--accentSoft); color: var(--accent);
+  border: 1px solid transparent; border-radius: var(--radiusSm);
+  font-size: 12.5px; font-weight: 600;
+}
+.snackAction:hover { background: var(--accent); color: var(--accentFg); border-color: transparent; }
+
+/* -------------------------------------------------------------- responsive */
+
+@media (max-width: 1100px) {
+  .versionList { width: 210px; }
+  .exportBar { justify-content: flex-start; }
+}
+
+@media (max-width: 860px) {
+  .sidebar { width: 232px; }
+  .brand, .topbar { padding-left: var(--s4); padding-right: var(--s4); }
+  .newThread, .threadsLbl { padding-left: var(--s4); padding-right: var(--s4); }
+  .transcript { padding: var(--s5) var(--s4); }
+  .stage, .composer { padding-left: var(--s4); padding-right: var(--s4); }
+  .versionList { width: 178px; }
+  .previewText { padding: var(--s5); }
 }

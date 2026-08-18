@@ -19,6 +19,7 @@ import {
 import * as llm from './llm.js';
 import * as db from './db.js';
 import { llmSettings } from './llm-settings.js';
+import { mountOracle } from './oracle.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
@@ -33,6 +34,13 @@ const GROUND_TRUTH_MAX_CHARS = Number(process.env.GROUND_TRUTH_MAX_CHARS || 40_0
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: MAX_UPLOAD } });
 
 app.use(express.json({ limit: '64mb' }));
+
+// The Grimoire: an alternative reading view of the same archive, plus the
+// Oracle that searches it. Mounted before the static handler so /grimoire is
+// served as a clean URL instead of being redirected to /grimoire/ by express.
+// Removing this line and public/grimoire/ removes the feature whole.
+mountOracle(app);
+
 app.use(express.static(path.join(__dirname, '..', 'public')));
 
 // The llm-settings plugin brings its own routes (/api/llm/*) and its own UI
@@ -991,5 +999,6 @@ app.listen(PORT, () => {
     console.log(`  fallbacks      →  ${fallbacks.map((f) => `${f.label} (${f.model || 'default model'})`).join(' → ')}`);
   }
   console.log(`  store          →  ${s.path}`);
-  console.log(`                    ${s.documents} documents · ${s.threads} threads · ${s.messages} messages\n`);
+  console.log(`                    ${s.documents} documents · ${s.threads} threads · ${s.messages} messages`);
+  console.log(`  grimoire       →  http://localhost:${PORT}/grimoire\n`);
 });
