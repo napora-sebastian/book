@@ -436,6 +436,27 @@ body.oracleOpen .deck { right: 372px; }
 .bubble mark { background: rgba(255, 180, 84, .25); color: var(--amber); }
 .turnErr { font-family: var(--mono); font-size: 10px; color: var(--alert); }
 
+/* Reasoning panel — the `reasoning_content` ds4-high/ds4-max streamed before
+   the answer. Collapsed by default; the summary carries the char count. */
+.think {
+  border: 1px solid var(--edgeSoft); border-radius: 4px;
+  background: rgba(3, 20, 30, .30); overflow: hidden;
+}
+.think > summary {
+  cursor: pointer; padding: 6px 10px; list-style: none;
+  font: 10px var(--mono); letter-spacing: .14em; color: var(--dim);
+  display: flex; align-items: center; gap: 7px;
+}
+.think > summary::-webkit-details-marker { display: none; }
+.think > summary::before { content: "▸"; transition: transform .15s; display: inline-block; }
+.think[open] > summary::before { transform: rotate(90deg); }
+.thinkBody {
+  margin: 0; padding: var(--s3); max-height: 200px; overflow: auto;
+  font: 11px/1.6 var(--mono); color: var(--fgSoft);
+  white-space: pre-wrap; word-break: break-word;
+  border-top: 1px solid var(--edgeSoft); background: rgba(1, 6, 12, .35);
+}
+
 .loadingRec { font-family: var(--mono); font-size: 11px; letter-spacing: .14em; color: var(--cyanDim); }
 .loadingRec::after { content: "▮"; animation: caret 1s steps(2) infinite; }
 @keyframes caret { 50% { opacity: 0; } }

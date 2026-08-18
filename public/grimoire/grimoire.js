@@ -131,6 +131,17 @@ function previewHtml(rec) {
   return `<div class="preview">${esc(rec.opening || rec.latest || 'NO EXCHANGE RECORDED')}</div>`;
 }
 
+/** Collapsible reasoning panel — the `reasoning_content` ds4-high/ds4-max
+ *  streamed before the answer. Kept separate from the bubble so the thinking
+ *  never contaminates the answer text. */
+function thinkHtml(reasoning) {
+  if (!reasoning) return '';
+  return `<details class="think">
+    <summary>THOUGHT · ${reasoning.length.toLocaleString()} CHARS</summary>
+    <pre class="thinkBody">${esc(reasoning)}</pre>
+  </details>`;
+}
+
 function turnsHtml(messages, rec) {
   const last = messages[messages.length - 1];
   return messages.map((m) => `
@@ -138,6 +149,7 @@ function turnsHtml(messages, rec) {
       <span class="turnWho">${m.role === 'user' ? 'OPERATOR' : esc(m.model || 'MODEL')} · ${fmtWhen(m.created_at)}${
         m.ms ? ` · ${(m.ms / 1000).toFixed(1)}S` : ''
       }</span>
+      ${thinkHtml(m.reasoning)}
       <div class="bubble${m.error ? ' errored' : ''}">${highlight(m.content, searchTerms)}</div>
       ${m.error ? `<span class="turnErr">⚠ ${esc(m.error)}</span>` : ''}
       <span class="turnActs">${turnActs(m, rec, last)}</span>
@@ -1696,6 +1708,15 @@ async function runTurn(id, url, body) {
         } else if (type === 'thinking') {
           thinking += v.length;
           say(`reasoning · ${thinking.toLocaleString()} chars`, true);
+          // Stream the thinking into the live panel as it arrives, so the
+          // reasoning is visible while the model is still working.
+          const think = live?.querySelector('.think');
+          if (think) {
+            think.classList.remove('hidden');
+            think.querySelector('summary').textContent = `THOUGHT · ${thinking.toLocaleString()} CHARS`;
+            think.querySelector('.thinkBody').textContent += v;
+            stick();
+          }
         } else if (type === 'stage') {
           say(v, true);
         } else if (type === 'usage') {
@@ -1747,7 +1768,9 @@ function liveTurn(who, label, text, msgId = null) {
   const art = document.createElement('article');
   art.className = `turn ${who}`;
   if (msgId) art.dataset.msg = String(msgId);
-  art.innerHTML = `<span class="turnWho">${esc(label)} · NOW</span><div class="bubble"></div>`;
+  art.innerHTML = `<span class="turnWho">${esc(label)} · NOW</span>
+    <details class="think hidden"><summary>THOUGHT · 0 CHARS</summary><pre class="thinkBody"></pre></details>
+    <div class="bubble"></div>`;
   art.querySelector('.bubble').textContent = text;
   return art;
 }
