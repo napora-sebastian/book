@@ -362,6 +362,89 @@ Tuning, all optional:
 | `ORACLE_DOC_CHARS` | `4000` | the document excerpt attached to a thread that has messages |
 | `ORACLE_DOC_ONLY_CHARS` | `16000` | the document attached to a thread that has none — there, the document is the record |
 
+## Constellation — the archive as a graph (`/grimoire-graphs`)
+
+The deck answers "which conversations do I have?". The graph answers the one
+that comes after it: **"what came from what?"**
+
+The working model is a network instead of a list. You put down one *point* — a
+book at a version you choose, or a conversation you have already had — and then
+you pull a line out of it. Every line you pull is a new conversation that reads
+what it came from. That conversation is a point too, so the next line comes off
+it, and the work grows outward.
+
+    ◆ book v9 ──┬──▶ ◈ "tighten chapter one"  ──▶ ◈ "now cut it by a third"
+                ├──▶ ◈ "same chapter, darker" ──▶ ◈ "file that as v10"
+                └──▶ ◈ "is the timeline consistent?"
+    ◆ book v3 ──────▶ ◈ "what changed between the drafts?"  ◀── (also reads the
+                                                                 conversation
+                                                                 above)
+
+Three branches off one book are three drafts being argued in parallel, from the
+same source, at whatever version each one is pinned to. That is the feature:
+one source, many threads, and the versions kept straight.
+
+### The two rules
+
+1. **Nothing on the canvas is a copy.** A point is a pointer at a thread or a
+   document that already exists. A conversation opened here is an ordinary
+   conversation — the deck lists it, the Oracle searches it, its answers file as
+   document versions. The graph records only where it came from.
+2. **Context is walked at send time, on the server.** Sending a turn assembles
+   its sources by walking upstream *at that moment*. Re-pin a book to an older
+   draft, or draw one more line into a point, and the very next turn reads the
+   new arrangement. There is no cached context to invalidate.
+
+### Working the canvas
+
+| | |
+| --- | --- |
+| drag the background, or scroll | pan |
+| pinch, `+` `−` `0` | zoom |
+| **drag a card's `○` out-port onto empty canvas** | opens a new conversation there, reading that point |
+| drag it **onto another conversation** | that conversation now reads this point too |
+| click a point | opens it: its sources, its transcript, its composer |
+| click a line | change what it carries, or cut it |
+| `F` / `L` | frame everything / lay the graph out left to right |
+
+`◆ BOOK` and `◈ THREAD` put an existing book or conversation down as a new root.
+A chat with no document behind it can be the root of a graph — which is the
+other half of what the view is for: a conversation becomes the source for the
+threads that branch off it.
+
+### What a line carries
+
+Each line has a mode, changed by clicking it or from the `READS` panel:
+
+| Mode | What arrives in the prompt |
+| --- | --- |
+| `WHOLE` | the entire book at its pinned version, or the parent's whole transcript (tail-truncated at `GRAPH_THREAD_SOURCE_CHARS`, whole turns only) |
+| `LAST` | only the parent's final answer — the cheap branch, for when the parent produced a draft and the argument that led there is noise |
+| `NONE` | the line stays drawn, recording where the work came from, but carries no text |
+
+The mode applies at the first hop. Points further upstream contribute in full,
+because they are what that parent was itself answered from — so a grandchild
+still gets the book. The `READS` panel in the inspector lists exactly what will
+go in, with the character count and a `PREVIEW` of the assembled text, before
+you send anything. Indirect ancestors are marked `↳`.
+
+Lines that would close a loop are refused, as is a book reading anything: a
+source reads nothing, which is what makes it a source.
+
+### Versioning one book across many threads
+
+A book point carries a `READS` picker listing the versions that actually exist
+(deleting a version in the middle leaves a gap; the picker never offers one that
+is gone). `newest` follows the document as it is revised; a pinned number holds
+still. Put the same book down twice, pin one to `v3` and leave the other on
+newest, and two branches argue two drafts at once — then a third point reading
+both is a diff conversation.
+
+Any answer can be filed as the next version of the book behind it with
+`⇪ FILE AS VERSION`, exactly as on the deck, and `⑂ BRANCH FROM THIS` opens a
+child that reads that one answer alone.
+
+
 ## Storage
 
 ```
@@ -575,12 +658,14 @@ server/
   db.js       node:sqlite schema, queries and trace writes
   search.js   FTS5 index over every message, kept in sync by triggers
   oracle.js   the /grimoire deck: records, search and retrieval inference
+  graph.js    the /grimoire-graphs canvas: points, lines, upstream context
   extract.js  pdfjs + mammoth → text
   llm.js      OpenAI-compatible client (streaming + one-shot)
   tasks.js    prompt templates, conversation and map/reduce builders
   chunk.js    paragraph-aware chunking
 public/       single-page frontend, no build step
-  grimoire/   the alternative view — deck + Oracle, same store, read only
+  grimoire/   the alternative view — deck + Oracle, same store
+  grimoire-graphs/  the graph view — sources, branches and versions on a canvas
 scripts/
   doctor.mjs  endpoint discovery + smoke test
   tunnel.sh   SSH port-forward to the Spark
@@ -679,6 +764,25 @@ large document, a cache hit shows up as a dramatically lower TTFT on later turns
 | `GET` | `/api/oracle/search?q=&limit=` | full-text search, grouped by thread |
 | `GET` | `/api/oracle/threads/:id` | one conversation to read |
 | `POST` | `/api/oracle/ask` | ask the archive, SSE stream back |
+| `GET` | `/grimoire-graphs` | the graph view |
+| `GET` `POST` | `/api/graphs` | list / create a graph |
+| `GET` `PATCH` `DELETE` | `/api/graphs/:id` | one canvas (points + lines) / rename / delete |
+| `GET` | `/api/graph-library` | books and conversations a point can be seeded from |
+| `POST` | `/api/graphs/:id/nodes` | put a point down (a book, or a conversation new or existing) |
+| `PATCH` `DELETE` | `/api/graphs/:id/nodes/:nid` | move / pin a version / remove (`?withThread=1` also deletes it) |
+| `POST` | `/api/graphs/:id/edges` | draw a line (refuses loops and self-links) |
+| `PATCH` `DELETE` | `/api/graphs/:id/edges/:eid` | change what a line carries / cut it |
+| `GET` | `/api/graphs/:id/nodes/:nid/source` | what the next turn will read, with a preview |
+| `GET` | `/api/graphs/:id/nodes/:nid/thread` | the conversation on a point, plus its lines |
+| `POST` | `/api/graphs/:id/nodes/:nid/messages` | send a turn with upstream context, SSE stream back |
+| `POST` | `/api/graphs/:id/nodes/:nid/messages/:mid/retry` | replay a failed tail turn, same context |
+| `POST` | `/api/graphs/:id/nodes/:nid/branch` | create the child, the point and the line in one write |
+
+The graph reuses the lab's inference path verbatim: a graph turn is an ordinary
+thread turn whose document was assembled from upstream points instead of read
+off the thread. Everything downstream of that — the context budget, the
+map-reduce split for a source that overflows it, the traces, the fallback chain
+— is the same code.
 
 The deck reads and writes through the lab's own endpoints — `/api/documents`
 (upload, replace, rename, remove), `/versions` (list, file, remove), `/diff`,

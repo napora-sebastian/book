@@ -20,6 +20,7 @@ import * as llm from './llm.js';
 import * as db from './db.js';
 import { llmSettings } from './llm-settings.js';
 import { mountOracle } from './oracle.js';
+import { mountGraph } from './graph.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
@@ -40,6 +41,11 @@ app.use(express.json({ limit: '64mb' }));
 // served as a clean URL instead of being redirected to /grimoire/ by express.
 // Removing this line and public/grimoire/ removes the feature whole.
 mountOracle(app);
+
+// The Graph: the same archive as a network of sources and the conversations
+// branched off them. It reuses `streamTurn` verbatim — a graph turn is an
+// ordinary thread turn whose context was assembled from upstream points.
+mountGraph(app, { streamTurn });
 
 app.use(express.static(path.join(__dirname, '..', 'public')));
 
@@ -682,7 +688,7 @@ app.get('/api/documents/:id/versions/:version/rtf', (req, res) => {
  * what makes retrying cheap: a failed turn leaves the question in the thread, so
  * the retry route replays it instead of asking the user to type it again.
  */
-async function streamTurn(res, { threadId, userMsg, history, taskId, chosenModel, version }) {
+async function streamTurn(res, { threadId, userMsg, history, taskId, chosenModel, version, source = null }) {
   const question = userMsg.content;
 
   res.writeHead(200, {
@@ -700,7 +706,11 @@ async function streamTurn(res, { threadId, userMsg, history, taskId, chosenModel
 
   send('user', userMsg);
 
-  const { text: docText, filename } = db.getThreadDocText(threadId, version);
+  // Normally the context is the thread's own document. A turn sent from a graph
+  // supplies its own instead: the points upstream of it, already assembled into
+  // one body of source text. Everything downstream — the budget check, the
+  // map-reduce split, the traces — is identical either way.
+  const { text: docText, filename } = source ?? db.getThreadDocText(threadId, version);
   const started = Date.now();
   const traceIds = [];
   let answer = '';
@@ -1000,5 +1010,6 @@ app.listen(PORT, () => {
   }
   console.log(`  store          →  ${s.path}`);
   console.log(`                    ${s.documents} documents · ${s.threads} threads · ${s.messages} messages`);
-  console.log(`  grimoire       →  http://localhost:${PORT}/grimoire\n`);
+  console.log(`  grimoire       →  http://localhost:${PORT}/grimoire`);
+  console.log(`  graphs         →  http://localhost:${PORT}/grimoire-graphs\n`);
 });

@@ -729,3 +729,280 @@ export function stats() {
 }
 
 export default db;
+
+/* ============================================================== graphs =====
+
+   A graph is the archive seen as a network instead of a list: one point stands
+   for a source you already have — a book at a chosen version, or a conversation
+   you have already had — and every line out of it is a new conversation that
+   was opened *from* that point and inherits it as context.
+
+   Nothing here duplicates a thread or a document. A node is a pointer plus a
+   position on the canvas, so a conversation opened on a graph is an ordinary
+   thread: it shows up in the deck, the Oracle searches it, its answers can be
+   filed as document versions. The graph only records where it came from.
+   ========================================================================= */
+
+db.exec(`
+  CREATE TABLE IF NOT EXISTS graphs (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    title       TEXT    NOT NULL,
+    created_at  TEXT    NOT NULL DEFAULT (datetime('now')),
+    updated_at  TEXT    NOT NULL DEFAULT (datetime('now'))
+  );
+
+  -- One point on the canvas. Exactly one of document_id / thread_id is set,
+  -- and both are ON DELETE CASCADE: a node pointing at a deleted thread would
+  -- be a line to nowhere, so it goes with it.
+  CREATE TABLE IF NOT EXISTS graph_nodes (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    graph_id    INTEGER NOT NULL REFERENCES graphs(id) ON DELETE CASCADE,
+    kind        TEXT    NOT NULL CHECK (kind IN ('document','thread')),
+    document_id INTEGER REFERENCES documents(id) ON DELETE CASCADE,
+    thread_id   INTEGER REFERENCES threads(id)   ON DELETE CASCADE,
+    -- Which version of the book this point *is*. NULL follows the newest, a
+    -- number pins it — so two branches off one book can be answered from two
+    -- different drafts of it at the same time.
+    doc_version INTEGER,
+    label       TEXT,
+    x           REAL    NOT NULL DEFAULT 0,
+    y           REAL    NOT NULL DEFAULT 0,
+    created_at  TEXT    NOT NULL DEFAULT (datetime('now'))
+  );
+
+  -- A line: "target was opened from source, and reads it".
+  --   mode  full → the whole source (book text, or the parent's whole transcript)
+  --         last → only the parent's final answer
+  --         none → the line is drawn but carries no context
+  CREATE TABLE IF NOT EXISTS graph_edges (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    graph_id    INTEGER NOT NULL REFERENCES graphs(id) ON DELETE CASCADE,
+    source_id   INTEGER NOT NULL REFERENCES graph_nodes(id) ON DELETE CASCADE,
+    target_id   INTEGER NOT NULL REFERENCES graph_nodes(id) ON DELETE CASCADE,
+    mode        TEXT    NOT NULL DEFAULT 'full' CHECK (mode IN ('full','last','none')),
+    label       TEXT,
+    created_at  TEXT    NOT NULL DEFAULT (datetime('now')),
+    UNIQUE(source_id, target_id)
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_graph_nodes_graph ON graph_nodes(graph_id);
+  CREATE INDEX IF NOT EXISTS idx_graph_nodes_thread ON graph_nodes(thread_id);
+  CREATE INDEX IF NOT EXISTS idx_graph_edges_graph ON graph_edges(graph_id);
+  CREATE INDEX IF NOT EXISTS idx_graph_edges_target ON graph_edges(target_id);
+  CREATE INDEX IF NOT EXISTS idx_graph_edges_source ON graph_edges(source_id);
+`);
+
+const touchGraph = (id) =>
+  db.prepare("UPDATE graphs SET updated_at = datetime('now') WHERE id = ?").run(id);
+
+export function createGraph(title) {
+  const { lastInsertRowid } = db
+    .prepare('INSERT INTO graphs (title) VALUES (?)')
+    .run(title?.trim() || 'New graph');
+  return getGraph(Number(lastInsertRowid));
+}
+
+export function listGraphs() {
+  return db
+    .prepare(
+      `SELECT g.*,
+              (SELECT COUNT(*) FROM graph_nodes n WHERE n.graph_id = g.id) AS node_count,
+              (SELECT COUNT(*) FROM graph_edges e WHERE e.graph_id = g.id) AS edge_count
+         FROM graphs g
+        ORDER BY g.updated_at DESC, g.id DESC`,
+    )
+    .all();
+}
+
+export function getGraph(id) {
+  return db.prepare('SELECT * FROM graphs WHERE id = ?').get(id) ?? null;
+}
+
+export function renameGraph(id, title) {
+  db.prepare("UPDATE graphs SET title = ?, updated_at = datetime('now') WHERE id = ?").run(title, id);
+  return getGraph(id);
+}
+
+export function deleteGraph(id) {
+  return db.prepare('DELETE FROM graphs WHERE id = ?').run(id).changes > 0;
+}
+
+/**
+ * Every node of one graph, carrying enough of what it points at to draw the
+ * card without a request per node — the filename and version count for a book,
+ * the title, turn count and last question for a conversation.
+ */
+export function listGraphNodes(graphId) {
+  return db
+    .prepare(
+      `SELECT n.*,
+              d.filename       AS doc_filename,
+              d.kind           AS doc_kind,
+              d.chars          AS doc_chars,
+              d.pages          AS doc_pages,
+              d.words          AS doc_words,
+              (SELECT COALESCE(MAX(dv.version), 1) FROM document_versions dv
+                WHERE dv.document_id = d.id)               AS doc_newest,
+              -- The versions that actually EXIST, not a range. Deleting a
+              -- version in the middle leaves a gap, and a picker built from
+              -- 1..newest would offer a draft that is no longer there.
+              (SELECT group_concat(dv.version) FROM document_versions dv
+                WHERE dv.document_id = d.id)               AS doc_versions,
+              t.title          AS thread_title,
+              t.model          AS thread_model,
+              t.document_id    AS thread_document_id,
+              t.updated_at     AS thread_updated_at,
+              (SELECT COUNT(*) FROM messages m WHERE m.thread_id = t.id) AS message_count,
+              (SELECT m.content FROM messages m
+                WHERE m.thread_id = t.id AND m.role = 'user'
+                ORDER BY m.id DESC LIMIT 1)                AS last_user,
+              (SELECT m.content FROM messages m
+                WHERE m.thread_id = t.id AND m.role = 'assistant'
+                ORDER BY m.id DESC LIMIT 1)                AS last_answer
+         FROM graph_nodes n
+         LEFT JOIN documents d ON d.id = n.document_id
+         LEFT JOIN threads   t ON t.id = n.thread_id
+        WHERE n.graph_id = ?
+        ORDER BY n.id ASC`,
+    )
+    .all(graphId);
+}
+
+export function getGraphNode(id) {
+  return db.prepare('SELECT * FROM graph_nodes WHERE id = ?').get(id) ?? null;
+}
+
+export function addGraphNode({ graphId, kind, documentId, threadId, docVersion, label, x, y }) {
+  const { lastInsertRowid } = db
+    .prepare(
+      `INSERT INTO graph_nodes (graph_id, kind, document_id, thread_id, doc_version, label, x, y)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+    )
+    .run(
+      graphId, kind, documentId ?? null, threadId ?? null,
+      docVersion ?? null, label ?? null, x ?? 0, y ?? 0,
+    );
+  touchGraph(graphId);
+  return getGraphNode(Number(lastInsertRowid));
+}
+
+/** Position, pinned version and label are the only mutable parts of a node. */
+export function updateGraphNode(id, { x, y, docVersion, label } = {}) {
+  const node = getGraphNode(id);
+  if (!node) return null;
+
+  const sets = [];
+  const args = [];
+  if (x != null) { sets.push('x = ?'); args.push(x); }
+  if (y != null) { sets.push('y = ?'); args.push(y); }
+  if (docVersion !== undefined) { sets.push('doc_version = ?'); args.push(docVersion ?? null); }
+  if (label !== undefined) { sets.push('label = ?'); args.push(label ?? null); }
+  if (!sets.length) return node;
+
+  db.prepare(`UPDATE graph_nodes SET ${sets.join(', ')} WHERE id = ?`).run(...args, id);
+  touchGraph(node.graph_id);
+  return getGraphNode(id);
+}
+
+/** Drops the node only. What it points at — the thread, the book — is left in
+ *  the archive; removing a point from a canvas is not deleting the work. */
+export function deleteGraphNode(id) {
+  const node = getGraphNode(id);
+  if (!node) return false;
+  db.prepare('DELETE FROM graph_nodes WHERE id = ?').run(id);
+  touchGraph(node.graph_id);
+  return true;
+}
+
+export function listGraphEdges(graphId) {
+  return db.prepare('SELECT * FROM graph_edges WHERE graph_id = ? ORDER BY id ASC').all(graphId);
+}
+
+/**
+ * Draw a line. Refuses a self-link and any link that would close a cycle —
+ * context is assembled by walking upstream, and a loop would never terminate.
+ */
+export function addGraphEdge({ graphId, sourceId, targetId, mode = 'full', label = null }) {
+  if (sourceId === targetId) throw new Error('A point cannot feed itself.');
+  const source = getGraphNode(sourceId);
+  const target = getGraphNode(targetId);
+  if (!source || !target) throw new Error('No such point.');
+  if (source.graph_id !== graphId || target.graph_id !== graphId) {
+    throw new Error('Both points must be on the same graph.');
+  }
+  if (target.kind !== 'thread') throw new Error('Only a conversation can read a source.');
+  if (ancestorIds(sourceId).includes(targetId)) {
+    throw new Error('That line would close a loop.');
+  }
+
+  db.prepare(
+    `INSERT INTO graph_edges (graph_id, source_id, target_id, mode, label)
+     VALUES (?, ?, ?, ?, ?)
+     ON CONFLICT(source_id, target_id) DO UPDATE SET mode = excluded.mode, label = excluded.label`,
+  ).run(graphId, sourceId, targetId, mode, label);
+  touchGraph(graphId);
+
+  return db.prepare('SELECT * FROM graph_edges WHERE source_id = ? AND target_id = ?')
+    .get(sourceId, targetId);
+}
+
+export function updateGraphEdge(id, { mode, label } = {}) {
+  const edge = db.prepare('SELECT * FROM graph_edges WHERE id = ?').get(id);
+  if (!edge) return null;
+  db.prepare('UPDATE graph_edges SET mode = COALESCE(?, mode), label = COALESCE(?, label) WHERE id = ?')
+    .run(mode ?? null, label ?? null, id);
+  touchGraph(edge.graph_id);
+  return db.prepare('SELECT * FROM graph_edges WHERE id = ?').get(id);
+}
+
+export function deleteGraphEdge(id) {
+  const edge = db.prepare('SELECT * FROM graph_edges WHERE id = ?').get(id);
+  if (!edge) return false;
+  db.prepare('DELETE FROM graph_edges WHERE id = ?').run(id);
+  touchGraph(edge.graph_id);
+  return true;
+}
+
+/** The points feeding this one directly, with the mode each line carries. */
+export function parentEdges(nodeId) {
+  return db
+    .prepare(
+      `SELECT e.*, n.kind, n.document_id, n.thread_id, n.doc_version, n.label
+         FROM graph_edges e
+         JOIN graph_nodes n ON n.id = e.source_id
+        WHERE e.target_id = ?
+        ORDER BY e.id ASC`,
+    )
+    .all(nodeId);
+}
+
+/**
+ * Every point upstream of this one, farthest first — the order the model should
+ * read them in, so the book arrives before the conversations that discuss it.
+ * Depth-first post-order, with a visited set: `addGraphEdge` already refuses
+ * cycles, but a store edited by hand must not hang the server.
+ */
+export function ancestorIds(nodeId) {
+  const seen = new Set();
+  const out = [];
+  const parentsOf = db.prepare('SELECT source_id FROM graph_edges WHERE target_id = ? ORDER BY id ASC');
+
+  const walk = (id) => {
+    if (seen.has(id)) return;
+    seen.add(id);
+    for (const { source_id } of parentsOf.all(id)) {
+      walk(source_id);
+      if (!out.includes(source_id)) out.push(source_id);
+    }
+  };
+  walk(nodeId);
+  return out;
+}
+
+/** The node a thread sits on, if any — so a thread opened on a graph can find
+ *  its way back to the canvas it belongs to. */
+export function graphNodeForThread(threadId) {
+  return db
+    .prepare('SELECT * FROM graph_nodes WHERE thread_id = ? ORDER BY id ASC LIMIT 1')
+    .get(threadId) ?? null;
+}
