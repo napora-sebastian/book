@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>Constellation — Spark Doc Lab</title>
 <link rel="stylesheet" href="/grimoire-graphs/graph.css" />
+<link rel="stylesheet" href="/grimoire-graphs/constellation.css" />
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><text y='14' font-size='14'>⁂</text></svg>" />
 </head>
 <body>
@@ -21,132 +22,10 @@
 
 <div class="frame" aria-hidden="true"></div>
 
-<header class="bar">
-  <a class="back" href="/grimoire" title="The deck — the same archive as a stack of records">◀ DECK</a>
-
-  <div class="ident">
-    <span class="identName">CONSTELLATION</span>
-    <span class="identSub" id="ident">— · —</span>
-  </div>
-
-  <div class="graphPick">
-    <select id="graphSel" class="hudSelect" title="Which graph is on the canvas"></select>
-    <button id="newGraph" class="hudBtn" title="Start a new graph">+ GRAPH</button>
-    <button id="renameGraph" class="ghostBtn" title="Rename this graph">✎</button>
-    <button id="dropGraph" class="ghostBtn" title="Delete this graph (the conversations survive)">✕</button>
-  </div>
-
-  <div class="barRight">
-    <button id="addDoc" class="hudBtn" title="Put a book on the canvas as a source">◆ BOOK</button>
-    <button id="addThread" class="hudBtn" title="Put a conversation you already have on the canvas">◈ THREAD</button>
-    <button id="tidy" class="hudBtn" title="Lay the graph out left to right (L)">⇥ TIDY</button>
-    <button id="fit" class="hudBtn" title="Frame everything (F)">⛶ FIT</button>
-    <button id="linkBtn" class="hudBtn" title="Providers, keys, models and the fallback chain">⚙ LINK</button>
-  </div>
-</header>
-
-<!-- The canvas. `world` is the only thing that pans and zooms; the edges layer
-     and the node layer share its transform so they can never drift apart. -->
-<main id="canvas" class="canvas">
-  <div id="world" class="world">
-    <svg id="wires" class="wires" aria-hidden="true">
-      <defs>
-        <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5"
-                markerWidth="7" markerHeight="7" orient="auto-start-reverse">
-          <path d="M0,0 L10,5 L0,10 z" fill="var(--cyanDim)" />
-        </marker>
-        <marker id="arrowLive" viewBox="0 0 10 10" refX="9" refY="5"
-                markerWidth="7" markerHeight="7" orient="auto-start-reverse">
-          <path d="M0,0 L10,5 L0,10 z" fill="var(--amber)" />
-        </marker>
-      </defs>
-      <g id="wireLines"></g>
-      <path id="ghostWire" class="ghostWire hidden" />
-    </svg>
-    <div id="points" class="points"></div>
-  </div>
-
-  <!-- Nothing on the canvas yet: the only two ways to start a graph. -->
-  <div id="seed" class="seed hidden">
-    <p class="seedMark">⁂</p>
-    <h2>NOTHING ON THIS CANVAS</h2>
-    <p class="seedWhat">A graph starts from one point you already have. Put it down, then
-       pull a line out of it — every line you pull is a new conversation that reads
-       what it came from.</p>
-    <div class="seedActs">
-      <button id="seedDoc" class="hudBtn primary">◆ START FROM A BOOK</button>
-      <button id="seedThread" class="hudBtn">◈ START FROM A CONVERSATION</button>
-    </div>
-  </div>
-</main>
-
-<!-- Readout: what is on the canvas and what is answering. -->
-<div class="readout" id="readout" aria-hidden="true"></div>
-
-<div class="canvasHint" id="hint">DRAG OR SCROLL TO PAN · PINCH TO ZOOM · DRAG THE ○ PORT TO PULL A NEW LINE · F FIT · L TIDY</div>
-
-<!-- The inspector: one conversation, its sources, and the composer that
-     extends it. Slides in from the right; the canvas keeps running behind. -->
-<aside id="inspector" class="inspector hidden" aria-label="Point inspector">
-  <header class="inspTop">
-    <span class="inspGlyph" id="inspGlyph">◈</span>
-    <div class="inspIdent">
-      <h2 id="inspTitle">—</h2>
-      <p class="inspSub" id="inspSub">—</p>
-    </div>
-    <button id="inspBranch" class="hudBtn" title="Open a new conversation from this point">⑂ BRANCH</button>
-    <button id="inspClose" class="ghostBtn" title="Close (ESC)">✕</button>
-  </header>
-
-  <!-- What this point will be answered from, before anything is sent. -->
-  <section class="sources" id="sources"></section>
-
-  <div class="inspLog" id="inspLog"></div>
-
-  <form class="composer" id="composer">
-    <div class="composerRow">
-      <select id="cTask" class="hudSelect" title="What kind of turn this is"></select>
-      <select id="cModel" class="hudSelect" title="Model that answers"></select>
-      <span class="composerStage" id="cStage"></span>
-    </div>
-    <div class="composerRow">
-      <textarea id="cInput" rows="1" placeholder="ASK THIS POINT…  [ENTER]"></textarea>
-      <button id="cSend" type="submit" class="hudBtn primary">SEND</button>
-      <button id="cHalt" type="button" class="ghostBtn hidden">HALT</button>
-    </div>
-  </form>
-</aside>
-
-<div id="snacks" class="snacks" aria-live="polite"></div>
-
-<!-- The wide panel: the book picker, the conversation picker, the source preview. -->
-<div id="sheet" class="modal hidden" role="dialog" aria-modal="true">
-  <div class="modalBox sheetBox">
-    <header class="modalTop">
-      <span id="sheetTitle">—</span>
-      <button id="sheetClose" class="ghostBtn">✕</button>
-    </header>
-    <div id="sheetBody" class="sheetBody"></div>
-    <footer id="sheetActs" class="modalActs"></footer>
-  </div>
-</div>
-
-<!-- One dialog for every prompt and confirmation, same gate the deck uses. -->
-<div id="modal" class="modal hidden" role="dialog" aria-modal="true">
-  <div class="modalBox">
-    <header class="modalTop"><span id="modalTitle">—</span></header>
-    <div class="modalBody">
-      <p id="modalWhat" class="modalWhat"></p>
-      <label id="modalLabel" class="modalLabel" for="modalInput"></label>
-      <input id="modalInput" class="modalInput" autocomplete="off" spellcheck="false" />
-      <p id="modalErr" class="modalErr"></p>
-    </div>
-    <footer class="modalActs">
-      <button id="modalCancel" class="hudBtn">CANCEL</button>
-      <button id="modalOk" class="hudBtn primary">CONFIRM</button>
-    </footer>
-  </div>
-</div>
+<!-- The canvas, its chrome, its inspector and its dialogs are all built by
+     constellation.js and hung in here. Nothing about the graph is written in
+     this file, because none of it belongs to this page in particular. -->
+<div id="constellation"></div>
 
 <script src="/grimoire-graphs/graph.js" type="module"></script>
 </body>

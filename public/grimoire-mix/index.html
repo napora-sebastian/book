@@ -3,11 +3,14 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>Archive Deck — Spark Doc Lab</title>
+<title>Mixed Console — Spark Doc Lab</title>
+<!-- The deck, unchanged, plus the canvas component and the modal that holds it. -->
 <link rel="stylesheet" href="/grimoire/grimoire.css" />
-<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><text y='14' font-size='14'>◈</text></svg>" />
+<link rel="stylesheet" href="/grimoire-graphs/constellation.css" />
+<link rel="stylesheet" href="/grimoire-mix/mix.css" />
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><text y='14' font-size='14'>⁂</text></svg>" />
 </head>
-<body class="oracleOpen">
+<body class="oracleOpen mixed">
 
 <!-- Everything in here is inert: a grid floor, a scan sweep, scanlines. The
      windows float in front of it and are never inside it. -->
@@ -23,10 +26,10 @@
 <div class="frame" aria-hidden="true"></div>
 
 <header class="bar">
-  <a class="back" href="/" title="The old two-column view. Nothing on the deck needs it any more.">◀ LAB</a>
+  <a class="back" href="/grimoire" title="The plain deck, without the graph over it">◀ DECK</a>
 
   <div class="ident">
-    <span class="identName">ARCHIVE DECK</span>
+    <span class="identName">MIXED CONSOLE</span>
     <span class="identSub" id="ident">— · —</span>
   </div>
 
@@ -38,8 +41,7 @@
   </div>
 
   <div class="barRight">
-    <a class="hudBtn" href="/grimoire-graphs" title="The same archive as a graph: sources, and the conversations branched off them">⁂ GRAPH</a>
-    <a class="hudBtn" href="/grimoire-mix" title="This deck, with the graph raised over it in a modal">◫⁂ MIX</a>
+    <button id="graphBtn" class="hudBtn" title="Raise the graph over the deck (G)">⁂ GRAPH</button>
     <button id="upload" class="hudBtn" title="Add a document and open a record for it">+ UPLOAD</button>
     <button id="newRec" class="hudBtn" title="Open a new record on a document already in the library">⊞ RECORD</button>
     <button id="savedBtn" class="hudBtn" title="Responses kept for reuse across records">★ SAVED</button>
@@ -150,6 +152,17 @@
   </div>
 </div>
 
+<!-- The graph, raised over everything.
+
+     It is not a copy of /grimoire-graphs: it is the same component, mounted in
+     here instead of over a page of its own. Mounted on first use and then kept
+     — a branch left answering behind a closed modal still has a card to stream
+     into. -->
+<div id="graphModal" class="graphModal hidden" role="dialog" aria-modal="true" aria-label="The graph">
+  <div id="graphStage" class="graphStage"></div>
+</div>
+
 <script src="/grimoire/grimoire.js" type="module"></script>
+<script src="/grimoire-mix/mix.js" type="module"></script>
 </body>
 </html>

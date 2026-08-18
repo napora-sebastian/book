@@ -1,0 +1,84 @@
+/* ===========================================================================
+   The mixed console — the deck, with the graph raised over it.
+
+   Nothing in here restyles the deck. It adds exactly two things: one button on
+   a window, and the sheet of glass that the canvas is mounted behind. The
+   canvas brings its own stylesheet, scoped to .constel, so the two never argue
+   about who owns .hudBtn.
+   =========================================================================== */
+
+/* -------------------------------------------------------- the window button */
+
+/* Amber, because it is the one control on a window that is not about this
+   record — it is about where the record stands among the others. */
+.winAct.graphAct {
+  color: var(--amber);
+  border-color: rgba(255, 180, 84, .32);
+}
+.winAct.graphAct:hover {
+  background: rgba(255, 180, 84, .18);
+  border-color: var(--amber);
+  color: #fff;
+}
+.winAct.graphAct.on {
+  background: rgba(255, 180, 84, .22);
+  border-color: var(--amber);
+}
+
+/* ------------------------------------------------------------- the overlay */
+
+/* Above everything the deck has: the expanded stage and the deck's own dialogs
+   both stand at 200, and this is raised over a deck that may have either open. */
+.graphModal {
+  position: fixed; inset: 0; z-index: 400;
+  display: flex;
+  background: rgba(1, 6, 12, .74);
+  backdrop-filter: blur(7px) saturate(.9);
+  -webkit-backdrop-filter: blur(7px) saturate(.9);
+  animation: mixRaise .2s ease;
+}
+@keyframes mixRaise { from { opacity: 0; } to { opacity: 1; } }
+@media (prefers-reduced-motion: reduce) { .graphModal { animation: none; } }
+
+/* The pane the canvas is mounted in. Inset rather than edge-to-edge so the
+   deck stays visible around it — the point of the mixed console is that the
+   graph is *over* the archive, not instead of it. */
+.graphStage {
+  position: relative;
+  flex: 1;
+  margin: 20px;
+  border: 1px solid var(--edge);
+  border-radius: 3px;
+  overflow: hidden;
+  background: linear-gradient(180deg, rgba(4, 18, 29, .96), rgba(1, 6, 12, .98));
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, .5), 0 40px 120px rgba(0, 0, 0, .6),
+              inset 0 0 90px rgba(111, 230, 255, .05);
+}
+
+/* Corner brackets, the same ones the console wears, so the pane reads as part
+   of the same machine rather than a web dialog dropped on top of it. */
+.graphStage::after {
+  content: "";
+  position: absolute; inset: 8px; z-index: 100; pointer-events: none;
+  background:
+    linear-gradient(var(--amber), var(--amber)) top left / 20px 1px no-repeat,
+    linear-gradient(var(--amber), var(--amber)) top left / 1px 20px no-repeat,
+    linear-gradient(var(--amber), var(--amber)) top right / 20px 1px no-repeat,
+    linear-gradient(var(--amber), var(--amber)) top right / 1px 20px no-repeat,
+    linear-gradient(var(--amber), var(--amber)) bottom left / 20px 1px no-repeat,
+    linear-gradient(var(--amber), var(--amber)) bottom left / 1px 20px no-repeat,
+    linear-gradient(var(--amber), var(--amber)) bottom right / 20px 1px no-repeat,
+    linear-gradient(var(--amber), var(--amber)) bottom right / 1px 20px no-repeat;
+  opacity: .5;
+}
+
+/* Embedded, the canvas has a modal pane to fill instead of a viewport, so its
+   chrome tucks in against the pane's edge rather than the screen's. */
+.graphStage .constel .bar { top: 14px; left: 16px; right: 16px; }
+.graphStage .constel .canvas { top: 74px; }
+.graphStage .constel .inspector { top: 74px; right: 16px; bottom: 14px; }
+.graphStage .constel .readout { left: 16px; bottom: 12px; }
+.graphStage .constel .canvasHint { bottom: 12px; right: 16px; }
+
+/* The deck keeps running behind — it just stops taking the keyboard. */
+body.graphOpen { overflow: hidden; }

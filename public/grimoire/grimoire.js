@@ -1536,6 +1536,20 @@ el.readout.innerHTML = [
 const deep = /^#thread=(\d+)$/.exec(location.hash);
 if (deep) reveal(Number(deep[1]));
 
+/**
+ * The mixed console (/grimoire-mix) runs this exact deck with the graph canvas
+ * in a modal over it. It needs three things from in here and nothing else: a
+ * way to re-read the archive after the graph has written to it, a way to travel
+ * to a record, and which record is in front. Everything else it does, it does
+ * from the outside — which is why this file has no idea the modal exists.
+ */
+window.deck = {
+  refresh: (opts) => refreshArchive(opts),
+  reveal,
+  front: () => order[focus] ?? null,
+  titleOf: (id) => byId.get(id)?.title ?? null,
+};
+
 /* ======================================================== dialogs & writes */
 
 /**

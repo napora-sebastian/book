@@ -47,6 +47,12 @@ mountOracle(app);
 // ordinary thread turn whose context was assembled from upstream points.
 mountGraph(app, { streamTurn });
 
+// The mixed console: the deck of windows with the graph raised over it in a
+// modal. It serves the deck's own script and the graph's own component, so it
+// adds a page and a seam, not a third implementation of either.
+app.get('/grimoire-mix', (_req, res) =>
+  res.sendFile(path.join(__dirname, '..', 'public', 'grimoire-mix', 'index.html')));
+
 app.use(express.static(path.join(__dirname, '..', 'public')));
 
 // The llm-settings plugin brings its own routes (/api/llm/*) and its own UI
@@ -1011,5 +1017,6 @@ app.listen(PORT, () => {
   console.log(`  store          →  ${s.path}`);
   console.log(`                    ${s.documents} documents · ${s.threads} threads · ${s.messages} messages`);
   console.log(`  grimoire       →  http://localhost:${PORT}/grimoire`);
-  console.log(`  graphs         →  http://localhost:${PORT}/grimoire-graphs\n`);
+  console.log(`  graphs         →  http://localhost:${PORT}/grimoire-graphs`);
+  console.log(`  mixed console  →  http://localhost:${PORT}/grimoire-mix\n`);
 });

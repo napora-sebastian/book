@@ -210,6 +210,231 @@ function freeSpotNear(graphId, parent) {
   return { x, y };
 }
 
+/* --------------------------------------------------------------- importing
+
+   An archive that has been used for months is already a graph — it is just
+   written down as a `document_id` on a thread, a `source_message_id` on a
+   version, and a row in `saved_response_threads`. Import reads those three
+   facts back out and draws them.
+
+   What it will NOT do is invent lineage. Two conversations on the same book are
+   siblings under that book, not a chain: nothing in the archive says one was
+   answered from the other, and a line that claims otherwise would send text
+   into a prompt that never informed it. Every line laid down here corresponds
+   to something the store actually records.
+   ------------------------------------------------------------------------ */
+
+const IMPORT_COL_X = 380;   // book column → conversation column
+const IMPORT_ROW_Y = 210;   // one conversation to the next
+const IMPORT_GROUP_GAP = 90;
+
+/**
+ * What an import would do, before it does any of it.
+ *
+ * Shown in full rather than summarised, because the interesting part is always
+ * the exceptions: the conversation already on a canvas, the book nobody ever
+ * asked anything about, the answer that was carried from one record into
+ * another two months ago and is the only real line in the whole archive.
+ */
+export function migrationPlan() {
+  const placedThreads = new Set(db.placedThreadIds());
+  const threads = db.listThreads(1000);
+  const documents = db.listDocuments(1000);
+
+  // Authorship: which conversations actually rewrote the book, as opposed to
+  // merely talking about it. Not a line — a book has no incoming lines — but it
+  // is written onto the line that feeds the conversation, so the canvas can say
+  // "this is the one that produced v5".
+  const authored = new Map();               // threadId → [versions]
+  for (const row of db.versionAuthors()) {
+    if (!authored.has(row.thread_id)) authored.set(row.thread_id, []);
+    authored.get(row.thread_id).push(row.version);
+  }
+
+  const byDoc = new Map(documents.map((d) => [d.id, []]));
+  const loose = [];
+  for (const t of threads) {
+    const row = {
+      id: t.id,
+      title: t.title,
+      message_count: t.message_count,
+      updated_at: t.updated_at,
+      placed: placedThreads.has(t.id),
+      filed: authored.get(t.id) ?? [],
+    };
+    if (t.document_id && byDoc.has(t.document_id)) byDoc.get(t.document_id).push(row);
+    else loose.push(row);
+  }
+
+  const known = new Set(threads.map((t) => t.id));
+  const reuse = db.answerReuseLinks()
+    .filter((r) => known.has(r.from_thread) && known.has(r.to_thread));
+
+  const docs = documents.map((d) => ({
+    id: d.id,
+    filename: d.filename,
+    chars: d.chars,
+    versions: d.version,
+    threads: byDoc.get(d.id) ?? [],
+  }));
+
+  const importable = [...docs.flatMap((d) => d.threads), ...loose].filter((t) => !t.placed);
+
+  return {
+    documents: docs,
+    loose,
+    reuse,
+    graphs: db.listGraphs(),
+    totals: {
+      documents: docs.length,
+      documentsWithWork: docs.filter((d) => d.threads.length).length,
+      conversations: threads.length,
+      placed: threads.length - importable.length,
+      importable: importable.length,
+      loose: loose.filter((t) => !t.placed).length,
+      authored: authored.size,
+      reuse: reuse.length,
+    },
+  };
+}
+
+/**
+ * Draw the plan.
+ *
+ *   per-document  one graph per book — the way the archive is actually shaped,
+ *                 and the one that stays readable when a book has nine chats
+ *   single        everything on one canvas, for seeing the whole archive at once
+ *
+ * Idempotent by default: a conversation already standing on some graph is left
+ * where it is, so running this twice does not put a second copy of the archive
+ * beside the first.
+ */
+export function runMigration({
+  mode = 'per-document',
+  followReuse = true,
+  skipPlaced = true,
+  threadIds = null,
+  title = null,
+} = {}) {
+  const plan = migrationPlan();
+  const want = threadIds ? new Set(threadIds.map(Number)) : null;
+  const take = (t) => (want ? want.has(t.id) : true) && !(skipPlaced && t.placed);
+
+  const groups = plan.documents
+    .map((d) => ({ doc: d, threads: d.threads.filter(take) }))
+    .filter((g) => g.threads.length);
+  const looseThreads = plan.loose.filter(take);
+
+  if (!groups.length && !looseThreads.length) {
+    return { graphs: [], nodes: 0, edges: 0, reuseSkipped: 0, skipped: plan.totals.placed, empty: true };
+  }
+
+  // threadId → { graphId, nodeId }, so the reuse lines can be drawn afterwards
+  // and only where both ends landed on the same canvas.
+  const placement = new Map();
+  const made = [];
+  let nodeCount = 0;
+  let edgeCount = 0;
+  // A reused answer whose two ends land on different canvases cannot be drawn:
+  // a line is a relationship *within* one graph. Counted rather than swallowed,
+  // because the user ticked a box that promised it.
+  let reuseSkipped = 0;
+
+  const authoredNote = (t) => (t.filed.length
+    ? `produced v${t.filed.join(', v')}`
+    : null);
+
+  /** One book and its conversations: the book on the left, the chats fanned
+   *  out to its right, and a line from the book into each of them. */
+  const layGroup = (graphId, group, topY) => {
+    const n = group.threads.length;
+    const doc = db.addGraphNode({
+      graphId, kind: 'document', documentId: group.doc.id,
+      x: 0, y: Math.round(topY + ((n - 1) * IMPORT_ROW_Y) / 2),
+    });
+    nodeCount++;
+
+    group.threads.forEach((t, i) => {
+      const node = db.addGraphNode({
+        graphId, kind: 'thread', threadId: t.id,
+        x: IMPORT_COL_X, y: Math.round(topY + i * IMPORT_ROW_Y),
+      });
+      nodeCount++;
+      placement.set(t.id, { graphId, nodeId: node.id });
+      db.addGraphEdge({
+        graphId, sourceId: doc.id, targetId: node.id, mode: 'full', label: authoredNote(t),
+      });
+      edgeCount++;
+    });
+
+    return topY + Math.max(1, n) * IMPORT_ROW_Y + IMPORT_GROUP_GAP;
+  };
+
+  /** A conversation with no book behind it is a root in its own right — the
+   *  "I only have a chat, and it is the source" case. */
+  const layLoose = (graphId, list, topY) => {
+    list.forEach((t, i) => {
+      const node = db.addGraphNode({
+        graphId, kind: 'thread', threadId: t.id, x: 0, y: Math.round(topY + i * IMPORT_ROW_Y),
+      });
+      nodeCount++;
+      placement.set(t.id, { graphId, nodeId: node.id });
+    });
+    return topY + list.length * IMPORT_ROW_Y + IMPORT_GROUP_GAP;
+  };
+
+  if (mode === 'single') {
+    const graph = db.createGraph(title?.trim() || 'The archive');
+    made.push(graph);
+    let y = 0;
+    for (const g of groups) y = layGroup(graph.id, g, y);
+    if (looseThreads.length) layLoose(graph.id, looseThreads, y);
+  } else {
+    for (const g of groups) {
+      const graph = db.createGraph(g.doc.filename);
+      made.push(graph);
+      layGroup(graph.id, g, 0);
+    }
+    if (looseThreads.length) {
+      const graph = db.createGraph('Conversations with no book');
+      made.push(graph);
+      layLoose(graph.id, looseThreads, 0);
+    }
+  }
+
+  // The one relationship the archive records outright: an answer from one
+  // conversation that somebody attached to another. Drawn as `last`, because
+  // what was carried across was the answer, not the argument behind it.
+  if (followReuse) {
+    for (const link of plan.reuse) {
+      const from = placement.get(link.from_thread);
+      const to = placement.get(link.to_thread);
+      if (!from || !to) continue;
+      if (from.graphId !== to.graphId) { reuseSkipped++; continue; }
+      try {
+        db.addGraphEdge({
+          graphId: from.graphId, sourceId: from.nodeId, targetId: to.nodeId,
+          mode: 'last', label: 'answer reused',
+        });
+        edgeCount++;
+      } catch {
+        // A loop or a duplicate. The rest of the import is not worth losing
+        // over one line that the graph refuses to hold.
+        reuseSkipped++;
+      }
+    }
+  }
+
+  return {
+    graphs: made.map((g) => db.getGraph(g.id)),
+    nodes: nodeCount,
+    edges: edgeCount,
+    reuseSkipped,
+    skipped: plan.totals.placed,
+    empty: false,
+  };
+}
+
 /* ------------------------------------------------------------------- mount */
 
 export function mountGraph(app, { streamTurn }) {
@@ -579,4 +804,84 @@ export function mountGraph(app, { streamTurn }) {
     }
     res.json({ node, thread, edge });
   });
+
+  /* ----------------------------------------------------------- importing */
+
+  /**
+   * Kept off `/api/graphs/:id` on purpose: that route is registered above and
+   * would happily read "migration-plan" as a graph id.
+   */
+  app.get('/api/graph-migration/plan', (_req, res) => res.json(migrationPlan()));
+
+  app.post('/api/graph-migration/run', (req, res) => {
+    const { mode, followReuse, skipPlaced, threadIds, title } = req.body || {};
+    if (mode && !['per-document', 'single'].includes(mode)) {
+      return res.status(400).json({ error: 'mode must be per-document or single.' });
+    }
+    res.json(runMigration({
+      mode: mode || 'per-document',
+      followReuse: followReuse !== false,
+      skipPlaced: skipPlaced !== false,
+      threadIds: Array.isArray(threadIds) ? threadIds : null,
+      title,
+    }));
+  });
+
+  /** Which conversations stand on a canvas at all. One request, so a deck of
+   *  fifty windows can mark its graph buttons without fifty of them. */
+  app.get('/api/graph-threads', (_req, res) => res.json({ threadIds: db.placedThreadIds() }));
+
+  /**
+   * Where a conversation stands, if it stands anywhere. The deck asks this to
+   * decide whether its graph button opens a canvas or offers to start one.
+   */
+  app.get('/api/graph-node-for-thread/:threadId', (req, res) => {
+    const node = db.graphNodeForThread(Number(req.params.threadId));
+    if (!node) return res.json({ node: null, graph: null });
+    res.json({ node, graph: db.getGraph(node.graph_id) });
+  });
+
+  /**
+   * Put a conversation that already exists onto a canvas, with the book it was
+   * opened on. Idempotent in both halves: the conversation is not placed twice,
+   * and a book already on that canvas is reused rather than duplicated — two
+   * points standing for the same book would silently double its text in every
+   * prompt downstream of both.
+   */
+  app.post('/api/graphs/:id/adopt-thread', (req, res) => {
+    const graphId = Number(req.params.id);
+    if (!db.getGraph(graphId)) return res.status(404).json({ error: 'No such graph.' });
+
+    const thread = db.getThread(Number(req.body?.threadId));
+    if (!thread) return res.status(404).json({ error: 'No such conversation.' });
+
+    const placed = db.listGraphNodes(graphId);
+    const already = placed.find((n) => n.thread_id === thread.id);
+    if (already) return res.json({ node: already, docNode: null, edge: null, already: true });
+
+    const withDocument = req.body?.withDocument !== false && thread.document_id != null;
+    let docNode = withDocument ? placed.find((n) => n.document_id === thread.document_id) : null;
+
+    // Somewhere clear: under everything already down, so an adopted point never
+    // lands on top of the work that is already on the canvas.
+    const floor = placed.length ? Math.max(...placed.map((n) => n.y)) + ROW_Y : 0;
+
+    if (withDocument && !docNode) {
+      docNode = db.addGraphNode({
+        graphId, kind: 'document', documentId: thread.document_id, x: 0, y: floor,
+      });
+    }
+
+    const spot = docNode ? freeSpotNear(graphId, docNode) : { x: 0, y: floor };
+    const node = db.addGraphNode({ graphId, kind: 'thread', threadId: thread.id, ...spot });
+
+    let edge = null;
+    if (docNode) {
+      try {
+        edge = db.addGraphEdge({ graphId, sourceId: docNode.id, targetId: node.id, mode: 'full' });
+      } catch { /* the point stands; the line can be drawn by hand */ }
+    }
+    res.json({ node, docNode, edge, already: false });
+  });
+
 }

@@ -1006,3 +1006,66 @@ export function graphNodeForThread(threadId) {
     .prepare('SELECT * FROM graph_nodes WHERE thread_id = ? ORDER BY id ASC LIMIT 1')
     .get(threadId) ?? null;
 }
+
+/* ------------------------------------------------- what the archive already knows
+
+   A graph does not have to be drawn from nothing. An archive that has been used
+   for a while already records where work came from — it just records it in
+   three different places, none of which look like a graph:
+
+     · a conversation's document      — every chat on one book shares a source
+     · document_versions.source_message_id
+                                      — which conversation actually rewrote it
+     · saved_response_threads         — an answer from one conversation that was
+                                        deliberately carried into another
+
+   These read that back out, so an import can lay down lines that were true
+   before the graph existed instead of inventing a shape.
+   ------------------------------------------------------------------------- */
+
+/** Threads that already stand on some graph, so an import can skip them. */
+export function placedThreadIds() {
+  return db.prepare('SELECT DISTINCT thread_id FROM graph_nodes WHERE thread_id IS NOT NULL')
+    .all().map((r) => r.thread_id);
+}
+
+/** Documents already on some graph, and which graph, so an import can reuse the
+ *  point instead of putting a second copy of the same book beside it. */
+export function placedDocumentNodes() {
+  return db.prepare(
+    `SELECT id, graph_id, document_id FROM graph_nodes
+      WHERE document_id IS NOT NULL ORDER BY id ASC`,
+  ).all();
+}
+
+/**
+ * Which conversation produced which draft. `source_message_id` is set whenever
+ * an answer was filed as a version, so this is authorship, not a guess — and it
+ * is the difference between a conversation that discussed the book and one that
+ * changed it.
+ */
+export function versionAuthors() {
+  return db.prepare(
+    `SELECT dv.document_id, dv.version, m.thread_id
+       FROM document_versions dv
+       JOIN messages m ON m.id = dv.source_message_id
+      WHERE dv.source_message_id IS NOT NULL
+      ORDER BY dv.document_id ASC, dv.version ASC`,
+  ).all();
+}
+
+/**
+ * An answer from one conversation that was attached to another. The archive's
+ * only record of a human deciding "this reads that", which is exactly the
+ * relationship a line on the canvas stands for.
+ */
+export function answerReuseLinks() {
+  return db.prepare(
+    `SELECT m.thread_id AS from_thread, srt.thread_id AS to_thread, COUNT(*) AS uses
+       FROM saved_response_threads srt
+       JOIN saved_responses sr ON sr.id = srt.saved_response_id
+       JOIN messages m         ON m.id = sr.message_id
+      WHERE m.thread_id <> srt.thread_id
+      GROUP BY m.thread_id, srt.thread_id`,
+  ).all();
+}
