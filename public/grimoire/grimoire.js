@@ -27,6 +27,7 @@ const el = {
   oracleForm: $('oracleForm'), oracleInput: $('oracleInput'), oracleSend: $('oracleSend'),
   oracleStop: $('oracleStop'), oracleModel: $('oracleModel'),
   oracleToggle: $('oracleToggle'), collapseOracle: $('collapseOracle'), showOracle: $('showOracle'),
+  traffic: $('traffic'),
 };
 
 const api = async (url, opts) => {
@@ -72,19 +73,51 @@ const docCache = new Map();    // documentId → extracted text
 const versionCache = new Map();// documentId → version rows
 const traceCache = new Map();  // threadId → { traces, usage }
 
-// Which face of the record is showing. It belongs to the deck rather than to
-// one window: travelling with DOCUMENT open should keep showing documents.
-let tab = 'transcript';
-let diffFrom = null;
-let diffTo = null;
 const winEls = new Map();      // threadId → the window element on the deck
 let controller = null;         // in-flight Oracle ask
 const oracleHistory = [];
 
-// One in-flight turn per record: the deck can be travelling while a record
-// behind you is still answering, so the abort handle belongs to the record and
-// not to the console.
-const turns = new Map();       // threadId → AbortController
+/**
+ * What each record is showing — held per record, and outside the DOM.
+ *
+ * Windows on this deck are disposable: travelling rebuilds the stack, and every
+ * write re-reads the archive and rebuilds it again. Anything kept in a window's
+ * markup is therefore gone the moment you look at something else, which is
+ * exactly what "I come back and it has reverted" was. So the window holds
+ * nothing of its own. Which face is open, where it was scrolled, what is
+ * half-typed into its composer, which turn is being rewritten — all of it lives
+ * here, and the window is drawn from it on arrival.
+ */
+const views = new Map();       // threadId → view
+function viewOf(id) {
+  let v = views.get(id);
+  if (!v) {
+    v = {
+      tab: 'transcript',
+      chosen: false,      // the user picked this face; stop falling through to the document
+      scrollTop: 0,
+      stick: false,       // pinned to the bottom — set while a turn is streaming in
+      draft: '', task: null, model: null, version: null,
+      diffFrom: null, diffTo: null,
+      editing: null,      // { msgId, text } while a question is being rewritten
+      stage: '',          // the composer's last status line, after its turn has ended
+    };
+    views.set(id, v);
+  }
+  return v;
+}
+
+/**
+ * The live turns — one per record, and likewise not in the DOM.
+ *
+ * A stream used to write into the window node it captured when it started; walk
+ * away and that node was thrown out, so the rest of the answer landed nowhere
+ * and the record looked untouched when you returned. Now the tokens land here
+ * and every window is only a view onto it: the one in front renders the answer
+ * being written, the ones behind render its tail. Records answer independently,
+ * so several can be running at once, each with its own session.
+ */
+const sessions = new Map();    // threadId → session
 let cfg = null;                // /api/config — tasks, models, provider
 
 // How far back the stack is built. Beyond this the windows are invisible
@@ -119,16 +152,101 @@ function metaLine(rec) {
     `<span>${fmtWhen(rec.last_at || rec.updated_at)}</span>`,
     rec.error_count ? `<span class="bad">${rec.error_count} FAILED</span>` : '',
     searchHits.has(rec.id) ? `<span class="doc">${searchHits.get(rec.id).hits} HIT</span>` : '',
+    sessions.has(rec.id) ? '<span class="live">◉ ANSWERING</span>' : '',
   ].filter(Boolean).join('');
 }
 
 /** Preview body — what a window shows while it is not the one being read. */
 function previewHtml(rec) {
+  const s = sessions.get(rec.id);
+  if (s) return livePreviewHtml(s);
   const hit = searchHits.get(rec.id);
   if (hit?.matches?.length) {
     return `<div class="preview">${hit.matches.map((m) => marked(m.snippet)).join('<br><br>')}</div>`;
   }
   return `<div class="preview">${esc(rec.opening || rec.latest || 'NO EXCHANGE RECORDED')}</div>`;
+}
+
+/**
+ * What a record shows while it is answering and you are reading something else.
+ * The tail of the text rather than its head: the interesting end of a stream is
+ * the end, and a window three deep in the stack has room for one paragraph.
+ */
+function livePreviewHtml(s) {
+  const body = s.answer || s.reasoning;
+  const tail = body.length > 420 ? `…${body.slice(-420)}` : body;
+  return `<div class="liveTag ${s.status}">◉ ${esc(s.stage || 'sending…')}</div>
+    <div class="preview live">${esc(tail) || 'WAITING FOR THE FIRST TOKEN'}</div>`;
+}
+
+/* ------------------------------------------------------------------ paint */
+
+/**
+ * Redraw one record from its session, coalesced to a frame.
+ *
+ * Tokens arrive faster than the screen refreshes and a record you are not
+ * looking at should cost nothing to keep up to date, so every stream event only
+ * marks its record dirty. What actually happens then depends on where the
+ * record is standing: the one in front gets its live bubble patched in place,
+ * the ones behind get their preview redrawn, and both get their line in the
+ * traffic panel.
+ */
+const dirty = new Set();
+let paintFrame = 0;
+
+function repaint(id) {
+  dirty.add(id);
+  if (paintFrame) return;
+  paintFrame = requestAnimationFrame(() => {
+    paintFrame = 0;
+    const ids = [...dirty];
+    dirty.clear();
+    for (const each of ids) paintOne(each);
+    renderTraffic();
+  });
+}
+
+function paintOne(id) {
+  const win = winEls.get(id);
+  if (!win) return;
+  const s = sessions.get(id);
+  const v = viewOf(id);
+
+  win.querySelector('.winRun')?.classList.toggle('hidden', !s);
+
+  const stageEl = win.querySelector('.composerStage');
+  if (stageEl) {
+    stageEl.textContent = s ? s.stage : v.stage;
+    stageEl.classList.toggle('working', Boolean(s?.working));
+  }
+
+  if (order[focus] !== id) return paintBehind(win, byId.get(id));
+  if (!s || v.tab !== 'transcript') return;
+
+  const art = win.querySelector('.turn.live');
+  if (!art) return;
+  art.querySelector('.bubble').textContent = s.answer;
+  const think = art.querySelector('.think');
+  if (think) {
+    think.classList.toggle('hidden', !s.reasoning);
+    think.querySelector('summary').textContent = `THOUGHT · ${s.reasoning.length.toLocaleString()} CHARS`;
+    think.querySelector('.thinkBody').textContent = s.reasoning;
+  }
+  const body = win.querySelector('.winBody');
+  if (body && v.stick) body.scrollTop = body.scrollHeight;
+}
+
+/** The body of a window standing behind the front one. Skipped when what it
+ *  would draw is what it is already showing — the deck redraws constantly. */
+function paintBehind(win, rec) {
+  if (!rec) return;
+  const s = sessions.get(rec.id);
+  const sig = s
+    ? `live:${s.answer.length}:${s.reasoning.length}:${s.stage}`
+    : `idle:${rec.message_count}:${searchHits.get(rec.id)?.hits ?? ''}`;
+  if (win.dataset.paint === sig) return;
+  win.dataset.paint = sig;
+  win.querySelector('.winBody').innerHTML = previewHtml(rec);
 }
 
 /** Collapsible reasoning panel — the `reasoning_content` ds4-high/ds4-max
@@ -142,9 +260,9 @@ function thinkHtml(reasoning) {
   </details>`;
 }
 
-function turnsHtml(messages, rec) {
+function turnsHtml(messages, rec, v) {
   const last = messages[messages.length - 1];
-  return messages.map((m) => `
+  return messages.map((m) => (v?.editing?.msgId === m.id ? editTurnHtml(v.editing) : `
     <article class="turn ${m.role}" data-msg="${m.id}">
       <span class="turnWho">${m.role === 'user' ? 'OPERATOR' : esc(m.model || 'MODEL')} · ${fmtWhen(m.created_at)}${
         m.ms ? ` · ${(m.ms / 1000).toFixed(1)}S` : ''
@@ -154,7 +272,68 @@ function turnsHtml(messages, rec) {
       ${m.error ? `<span class="turnErr">⚠ ${esc(m.error)}</span>` : ''}
       <span class="turnActs">${turnActs(m, rec, last)}</span>
       <div class="gtBox hidden" data-gt="${m.id}"></div>
-    </article>`).join('');
+    </article>`)).join('');
+}
+
+/** A question open for rewriting. Held in the record's view, so travelling away
+ *  mid-edit and coming back finds the same half-written question. */
+function editTurnHtml(editing) {
+  return `
+    <article class="turn user editing" data-msg="${editing.msgId}">
+      <span class="turnWho">EDIT · EVERYTHING AFTER THIS IS DISCARDED</span>
+      <textarea class="editInput">${esc(editing.text)}</textarea>
+      <span class="turnActs">
+        <button class="winAct" data-act="editRun" data-msg="${editing.msgId}">↻ ASK AGAIN</button>
+        <button class="winAct" data-act="editCancel">✕ CANCEL</button>
+      </span>
+    </article>`;
+}
+
+/**
+ * The whole transcript of a record, stored turns and running turn together.
+ *
+ * This is the piece that makes the deck safe to walk away from: the transcript
+ * is a function of the record plus its session, so it can be thrown away and
+ * rebuilt at any moment — on arrival, after a refresh, halfway through a
+ * sentence the model is still writing — and come back identical.
+ */
+function transcriptHtml(id, rec) {
+  const v = viewOf(id);
+  const s = sessions.get(id);
+
+  // A retry or an edit replaces the tail of the record. Those turns are dropped
+  // here rather than out of the DOM, so a rebuild does not resurrect them.
+  let kept = rec.messages;
+  if (s?.replacesFrom != null) {
+    const cut = rec.messages.findIndex((m) => m.id === s.replacesFrom);
+    if (cut !== -1) kept = rec.messages.slice(0, cut);
+  }
+
+  const html = turnsHtml(kept, rec, v) + (s ? liveTurnsHtml(s) : '');
+  return html.trim() || `<div class="notice">NO EXCHANGE RECORDED${
+    rec.document ? ' — this record is its document; see the DOCUMENT tab.' : '.'}</div>`;
+}
+
+/** The turn being streamed right now, drawn from the session rather than typed
+ *  into the page one token at a time. */
+function liveTurnsHtml(s) {
+  const q = s.user ? `
+    <article class="turn user" data-msg="${s.user.id}">
+      <span class="turnWho">OPERATOR · NOW</span>
+      <div class="bubble">${esc(s.user.content)}</div>
+    </article>` : '';
+
+  return `${q}
+    <article class="turn assistant live">
+      <span class="turnWho">${esc(s.model || 'MODEL')} · ${
+        s.status === 'running' ? 'ANSWERING' : s.status.toUpperCase()}</span>
+      <details class="think${s.reasoning ? '' : ' hidden'}"${s.thinkOpen ? ' open' : ''}>
+        <summary>THOUGHT · ${s.reasoning.length.toLocaleString()} CHARS</summary>
+        <pre class="thinkBody">${esc(s.reasoning)}</pre>
+      </details>
+      <div class="bubble${s.status === 'error' ? ' errored' : ''}${
+        s.status === 'running' ? ' streaming' : ''}">${esc(s.answer)}</div>
+    </article>`;
 }
 
 /**
@@ -207,6 +386,7 @@ function makeWindow(rec) {
     <header class="winTop">
       <span class="winId">REC ${pad(rec.id)}</span>
       <h2 class="winTitle">${esc(rec.title)}</h2>
+      <span class="winRun hidden" title="This record is answering">◉</span>
       <div class="winActs">
         <button class="winAct" data-act="ask" title="Ask the Oracle about this record">◈ ASK</button>
         <button class="winAct" data-act="renameRec" title="Rename this record">✎</button>
@@ -239,6 +419,7 @@ function makeWindow(rec) {
  */
 async function fitComposer(win, id, rec) {
   const foot = win.querySelector('.winFoot');
+  const v = viewOf(id);
   // Shown on every face of the record, not just its transcript: a record with
   // nothing said in it opens on its DOCUMENT, and hiding the composer there
   // would leave the one window you most want to talk to with no way in.
@@ -272,9 +453,10 @@ async function fitComposer(win, id, rec) {
     if (versions?.length) {
       const newest = versions[0]?.version ?? 1;
       verPick.innerHTML = versions
-        .map((v) => `<option value="${v.version}">V${v.version}${v.version === newest ? ' · NEWEST' : ''}</option>`)
+        .map((row) => `<option value="${row.version}">V${row.version}${row.version === newest ? ' · NEWEST' : ''}</option>`)
         .join('');
-      verPick.value = String(newest);
+      verPick.value = String(v.version ?? newest);
+      if (!verPick.value) verPick.value = String(newest);
       verPick.classList.remove('hidden');
     } else {
       verPick.classList.add('hidden');
@@ -284,10 +466,34 @@ async function fitComposer(win, id, rec) {
   }
 
   // A thread remembers which model answered in it; the picker has to agree, or
-  // the next turn silently changes the model the record was built with.
+  // the next turn silently changes the model the record was built with. What
+  // the user picked for this record outranks it — that choice is theirs and it
+  // must survive travelling away and back.
   const pick = foot.querySelector('.composerModel');
-  const want = rec.thread?.model || cfg?.model;
+  const want = v.model || rec.thread?.model || cfg?.model;
   if (want && [...pick.options].some((o) => o.value === want)) pick.value = want;
+
+  const taskPick = foot.querySelector('.composerTask');
+  if (v.task && [...taskPick.options].some((o) => o.value === v.task)) taskPick.value = v.task;
+
+  // Half a question typed into a record is state like any other. Assigned only
+  // when it differs, or restoring it under the user's own typing would throw
+  // the caret to the end of the line.
+  const input = foot.querySelector('.composerInput');
+  if (input.value !== v.draft) {
+    input.value = v.draft;
+    input.style.height = 'auto';
+    if (v.draft) input.style.height = `${Math.min(input.scrollHeight, 120)}px`;
+  }
+
+  // SEND or HALT is not a property of the console but of this record: one can
+  // be answering while the next one is waiting for a question.
+  const s = sessions.get(id);
+  foot.querySelector('[data-act="send"]').classList.toggle('hidden', Boolean(s));
+  foot.querySelector('[data-act="halt"]').classList.toggle('hidden', !s);
+  const stageEl = foot.querySelector('.composerStage');
+  stageEl.textContent = s ? s.stage : v.stage;
+  stageEl.classList.toggle('working', Boolean(s?.working));
   return foot;
 }
 
@@ -318,12 +524,15 @@ function tabsFor(rec) {
 }
 
 /**
- * `auto` is the difference between arriving at a record and choosing a face of
+ * Draw the record at the front of the deck, from its own view state.
+ *
+ * `chosen` is the difference between arriving at a record and picking a face of
  * it: on arrival an empty transcript falls through to the document, but a tab
- * the user actually clicked is never overridden — bouncing off a click reads
- * as a broken button.
+ * the user actually clicked is never overridden — bouncing off a click reads as
+ * a broken button. It is per record, so one window sitting on its DOCUMENT does
+ * not drag every other window onto theirs.
  */
-async function openFront(id, { auto = true } = {}) {
+async function openFront(id) {
   const win = winEls.get(id);
   if (!win) return;
 
@@ -336,14 +545,15 @@ async function openFront(id, { auto = true } = {}) {
   }
   if (order[focus] !== id) return;   // the stack moved on while that was in flight
 
+  const v = viewOf(id);
   const tabs = tabsFor(rec);
   // A thread with nothing said in it IS its document — landing on an empty
   // transcript and calling that the record was the whole complaint.
-  if (!tabs.some((t) => t.id === tab)) tab = 'transcript';
-  if (auto && tab === 'transcript' && !rec.messages.length && rec.document) tab = 'document';
+  if (!tabs.some((t) => t.id === v.tab)) v.tab = 'transcript';
+  if (!v.chosen && v.tab === 'transcript' && !rec.messages.length && rec.document) v.tab = 'document';
 
   win.querySelector('.winTabs').innerHTML = tabs
-    .map((t) => `<button class="tab${t.id === tab ? ' on' : ''}" data-tab="${t.id}">${t.label}</button>`)
+    .map((t) => `<button class="tab${t.id === v.tab ? ' on' : ''}" data-tab="${t.id}">${t.label}</button>`)
     .join('');
 
   await fitComposer(win, id, rec);
@@ -352,25 +562,39 @@ async function openFront(id, { auto = true } = {}) {
 
 async function renderTab(win, id, rec) {
   const body = win.querySelector('.winBody');
-  const show = (html) => { if (order[focus] === id) body.innerHTML = html; };
+  const v = viewOf(id);
+  let drawn = false;
+  const show = (html) => {
+    if (order[focus] !== id) return;
+    body.innerHTML = html;
+    drawn = true;
+  };
 
   try {
-    if (tab === 'transcript') {
-      show(rec.messages.length
-        ? turnsHtml(rec.messages, rec)
-        : `<div class="notice">NO EXCHANGE RECORDED${
-            rec.document ? ' — this record is its document; see the DOCUMENT tab.' : '.'}</div>`);
-      body.scrollTop = 0;
-      return;
-    }
-
-    if (tab === 'document') return show(await documentHtml(rec));
-    if (tab === 'versions') return show(await versionsHtml(rec));
-    if (tab === 'traces') return show(await tracesHtml(id));
+    if (v.tab === 'transcript') show(transcriptHtml(id, rec));
+    else if (v.tab === 'document') show(await documentHtml(rec));
+    else if (v.tab === 'versions') show(await versionsHtml(id, rec));
+    else if (v.tab === 'traces') show(await tracesHtml(id));
   } catch (err) {
     show(`<div class="notice bad">${esc(err.message)}</div>`);
     toast(err.message, 'err');
   }
+  if (drawn) applyScroll(win, id);
+}
+
+/**
+ * Put the record back where it was being read.
+ *
+ * How far down a record you had got is state like any other, and losing it on
+ * every trip through the deck is the same complaint as losing the text. `stick`
+ * overrides it while a turn is streaming, because there the interesting line is
+ * always the last one.
+ */
+function applyScroll(win, id) {
+  const body = win.querySelector('.winBody');
+  if (!body) return;
+  const v = viewOf(id);
+  body.scrollTop = v.stick ? body.scrollHeight : v.scrollTop;
 }
 
 /* ------------------------------------------------------------ record faces */
@@ -398,18 +622,22 @@ async function documentHtml(rec) {
     <div class="docText">${highlight(text, searchTerms)}</div>`;
 }
 
-async function versionsHtml(rec) {
+async function versionsHtml(id, rec) {
   const doc = rec.document;
   if (!versionCache.has(doc.id)) {
     const { versions } = await api(`/api/documents/${doc.id}/versions`);
     versionCache.set(doc.id, versions);
   }
   const versions = versionCache.get(doc.id);
+  const view = viewOf(id);
+  let { diffFrom, diffTo } = view;
 
   // Default comparison is the newest change — the one you almost always want.
   if (diffTo == null || !versions.some((v) => v.version === diffTo)) {
     diffTo = versions[0]?.version ?? 1;
     diffFrom = Math.max(1, diffTo - 1);
+    view.diffTo = diffTo;
+    view.diffFrom = diffFrom;
   }
 
   const rows = versions.map((v) => `
@@ -469,9 +697,10 @@ async function tracesHtml(threadId) {
 }
 
 /** The version diff, in the same shape the lab renders it. */
-async function showDiff(docId) {
+async function showDiff(id, docId) {
   const out = document.getElementById('diffOut');
   if (!out) return;
+  const { diffFrom, diffTo } = viewOf(id);
   out.innerHTML = '<p class="loadingRec">COMPARING</p>';
   const d = await api(`/api/documents/${docId}/diff?from=${diffFrom}&to=${diffTo}`);
 
@@ -531,21 +760,27 @@ function renderDeck() {
     win.style.setProperty('--r', String(r));
     win.dataset.band = bandFor(r);
     win.classList.toggle('cited', cited.has(id));
-    // A window that fell out of the front reverts to its preview, so the deck
-    // never carries more transcripts than the one being read.
-    if (r !== 0 && win.dataset.full === '1') {
-      win.querySelector('.winBody').innerHTML = previewHtml(rec);
-      win.dataset.full = '0';
-    }
+    // The chrome is patched rather than rebuilt: a record's title and counts
+    // change under it while it is answering, and the window has to survive that
+    // — it may be holding a live turn.
+    win.querySelector('.winTitle').textContent = rec.title;
+    win.querySelector('.winMeta').innerHTML = metaLine(rec);
+    win.querySelector('.winRun').classList.toggle('hidden', !sessions.has(id));
+
     if (r === 0) {
-      win.dataset.full = '1';
+      // Whatever the preview last drew is stale the moment this becomes the
+      // record being read, so the next trip behind redraws from scratch.
+      win.dataset.paint = '';
       openFront(id);
       win.querySelector('[data-act="expand"]').textContent = winState === 'expanded' ? '⤡' : '⤢';
       win.querySelector('[data-act="collapse"]').textContent = winState === 'collapsed' ? '+' : '–';
+    } else {
+      paintBehind(win, rec);
     }
   });
 
   renderRail();
+  renderTraffic();
   const rec = byId.get(order[focus]);
   el.ident.textContent = `REC ${pad(rec.id)} · ${pad(focus + 1)}/${pad(order.length)} · ${
     rec.filename ? rec.filename.toUpperCase() : 'NO DOCUMENT'}`;
@@ -556,12 +791,43 @@ function renderRail() {
     zoom === 1 ? '' : ` · ${Math.round(zoom * 100)}%`}</div>`;
   order.forEach((id, i) => {
     const tick = document.createElement('button');
-    tick.className = `tick${i === focus ? ' on' : ''}${cited.has(id) ? ' cited' : ''}`;
+    tick.className = `tick${i === focus ? ' on' : ''}${cited.has(id) ? ' cited' : ''}${
+      sessions.has(id) ? ' busy' : ''}`;
     tick.title = byId.get(id).title;
     tick.addEventListener('click', () => setFocus(i));
     el.rail.append(tick);
   });
 }
+
+/**
+ * Every record currently answering, listed together.
+ *
+ * With one record talking at a time the composer's own status line was the
+ * whole story. Several at once needs somewhere that is not any single window:
+ * this says which records are running and how far along, from wherever you are
+ * standing, and each line is the way back to its record.
+ */
+function renderTraffic() {
+  const live = [...sessions.entries()];
+  el.traffic.classList.toggle('hidden', !live.length);
+  if (!live.length) { el.traffic.innerHTML = ''; return; }
+
+  el.traffic.innerHTML = `<div class="trafficHead">${pad(live.length)} ANSWERING</div>${
+    live.map(([id, s]) => `
+      <div class="trafficRow${order[focus] === id ? ' here' : ''}">
+        <button class="trafficGo" data-id="${id}" title="${esc(byId.get(id)?.title ?? '')}">REC ${pad(id)}</button>
+        <span class="trafficStage">${esc(s.stage || 'sending…')}</span>
+        <span class="trafficLen">${s.answer.length ? `${s.answer.length.toLocaleString()}C` : '—'}</span>
+        <button class="trafficStop" data-id="${id}" title="Halt this turn">✕</button>
+      </div>`).join('')}`;
+}
+
+el.traffic.addEventListener('click', (e) => {
+  const go = e.target.closest('.trafficGo');
+  if (go) return reveal(Number(go.dataset.id));
+  const stop = e.target.closest('.trafficStop');
+  if (stop) sessions.get(Number(stop.dataset.id))?.ac.abort();
+});
 
 /**
  * Pinch. The two numbers move together on purpose: as each window shrinks the
@@ -665,8 +931,8 @@ function reveal(threadId) {
 function applyOrder(list) {
   order = list.map((r) => r.id);
   focus = 0;
-  for (const [, node] of winEls) node.remove();
-  winEls.clear();
+  // The windows are not thrown away: one of them may be holding a live turn,
+  // and renderDeck drops whatever has fallen outside the visible slice anyway.
   renderDeck();
   renderIndex(list);
 }
@@ -730,8 +996,11 @@ el.deck.addEventListener('click', (e) => {
 
   const tabBtn = e.target.closest('.tab');
   if (tabBtn) {
-    tab = tabBtn.dataset.tab;
-    return openFront(id, { auto: false });
+    const v = viewOf(id);
+    if (v.tab !== tabBtn.dataset.tab) { v.scrollTop = 0; v.stick = false; }
+    v.tab = tabBtn.dataset.tab;
+    v.chosen = true;
+    return openFront(id);
   }
 
   // Not just .winAct: the composer's own SEND and HALT are console buttons that
@@ -743,7 +1012,7 @@ el.deck.addEventListener('click', (e) => {
   const rec = recordCache.get(id);
   if (act === 'ask') askAbout(id);
   if (act === 'send') sendFromComposer(id, win);
-  if (act === 'halt') turns.get(id)?.abort();
+  if (act === 'halt') sessions.get(id)?.ac.abort();
 
   const msgId = Number(el2.dataset.msg);
   if (act === 'copyMsg') copyMessage(id, msgId, el2);
@@ -752,7 +1021,7 @@ el.deck.addEventListener('click', (e) => {
   if (act === 'retryMsg') retryTurn(id, msgId);
   if (act === 'editMsg') beginEdit(win, id, msgId);
   if (act === 'editRun') commitEdit(win, id, msgId);
-  if (act === 'editCancel') openFront(id, { auto: false });
+  if (act === 'editCancel') { viewOf(id).editing = null; openFront(id); }
   if (act === 'expand') setWinState('expanded');
   if (act === 'collapse') setWinState('collapsed');
   if (act === 'dl') toast(`Exporting ${el2.textContent.replace(/[^A-Z]/g, '')} — check your downloads`, 'info');
@@ -776,12 +1045,13 @@ el.deck.addEventListener('click', (e) => {
 
   // Picking the two sides of a comparison, then running it.
   if (act === 'from' || act === 'to') {
-    const v = Number(el2.dataset.v);
-    if (act === 'from') diffFrom = v; else diffTo = v;
-    if (rec) openFront(id, { auto: false }).then(() => toast(`Comparing V${diffFrom} → V${diffTo}`, 'info'));
+    const view = viewOf(id);
+    const n = Number(el2.dataset.v);
+    if (act === 'from') view.diffFrom = n; else view.diffTo = n;
+    if (rec) openFront(id).then(() => toast(`Comparing V${view.diffFrom} → V${view.diffTo}`, 'info'));
   }
   if (act === 'diff' && rec?.document) {
-    showDiff(rec.document.id).catch((err) => toast(err.message, 'err'));
+    showDiff(id, rec.document.id).catch((err) => toast(err.message, 'err'));
   }
 });
 
@@ -795,12 +1065,56 @@ el.deck.addEventListener('keydown', (e) => {
   }
 });
 
+// Everything typed or picked inside a window is written straight through to the
+// record's view. The window is rebuilt constantly; this is what survives it.
 el.deck.addEventListener('input', (e) => {
+  const win = e.target.closest('.win');
+  if (!win) return;
+  const id = Number(win.dataset.id);
+
   const input = e.target.closest('.composerInput');
-  if (!input) return;
-  input.style.height = 'auto';
-  input.style.height = `${Math.min(input.scrollHeight, 120)}px`;
+  if (input) {
+    viewOf(id).draft = input.value;
+    input.style.height = 'auto';
+    input.style.height = `${Math.min(input.scrollHeight, 120)}px`;
+    return;
+  }
+  const edit = e.target.closest('.editInput');
+  if (edit && viewOf(id).editing) viewOf(id).editing.text = edit.value;
 });
+
+el.deck.addEventListener('change', (e) => {
+  const win = e.target.closest('.win');
+  if (!win) return;
+  const v = viewOf(Number(win.dataset.id));
+  if (e.target.closest('.composerTask')) v.task = e.target.value;
+  if (e.target.closest('.composerModel')) v.model = e.target.value;
+  if (e.target.closest('.composerVersion')) v.version = e.target.value;
+});
+
+// Scroll does not bubble, so it is caught on the way down. How far into a
+// record you had read is the state most obviously lost when a window is rebuilt.
+el.deck.addEventListener('scroll', (e) => {
+  const body = e.target;
+  if (!body?.classList?.contains('winBody')) return;
+  const win = body.closest('.win');
+  if (!win || win.dataset.band !== 'front') return;
+  const v = viewOf(Number(win.dataset.id));
+  v.scrollTop = body.scrollTop;
+  // Scrolling up out of the tail during a stream stops the answer dragging the
+  // view down; scrolling back to the bottom re-attaches it.
+  v.stick = body.scrollHeight - body.scrollTop - body.clientHeight < 40;
+}, true);
+
+// Whether the reasoning panel of a running turn is open is state too — a rebuild
+// mid-stream would otherwise fold it back up under the user.
+el.deck.addEventListener('toggle', (e) => {
+  const think = e.target.closest?.('.turn.live .think');
+  if (!think) return;
+  const win = think.closest('.win');
+  const s = win && sessions.get(Number(win.dataset.id));
+  if (s) s.thinkOpen = think.open;
+}, true);
 
 // Double-clicking the title bar expands, the way a window manager does.
 el.deck.addEventListener('dblclick', (e) => {
@@ -1283,7 +1597,7 @@ function openModal({ title, what = '', label = null, value = '', confirmWord = n
  * Caches for the touched record are dropped, since that is exactly what
  * changed.
  */
-async function refreshArchive({ keep = null, drop = null } = {}) {
+async function refreshArchive({ keep = null, ensure = null, drop = null } = {}) {
   if (drop != null) {
     recordCache.delete(drop);
     traceCache.delete(drop);
@@ -1293,21 +1607,23 @@ async function refreshArchive({ keep = null, drop = null } = {}) {
   byId = new Map(records.map((r) => [r.id, r]));
   renderCounts(archive.stats);
 
+  // Where the camera stays, and which record must not be filtered away — not
+  // always the same one. A turn finishing in a record you walked away from has
+  // to leave the deck exactly where you are standing.
   const target = keep ?? order[focus];
+  const needed = ensure ?? target;
   order = records.map((r) => r.id).filter((id) => (searchHits.size ? searchHits.has(id) : true));
 
   // A record created or changed by an action must not land behind the active
   // query — being sent somewhere else after uploading a file reads as the
   // upload having failed.
-  if (target != null && !order.includes(target) && byId.has(target)) {
+  if (needed != null && !order.includes(needed) && byId.has(needed)) {
     searchHits = new Map();
     searchTerms = [];
     el.q.value = '';
     el.clearQ.classList.add('hidden');
     order = records.map((r) => r.id);
   }
-  for (const [, node] of winEls) node.remove();
-  winEls.clear();
   focus = Math.max(0, order.indexOf(target));
   renderDeck();
   renderIndex(records.filter((r) => order.includes(r.id)));
@@ -1340,8 +1656,10 @@ el.uploadFile.addEventListener('change', async () => {
       body: JSON.stringify({ title: doc.filename, documentId: doc.id }),
     });
     await refreshArchive({ keep: thread.id });
-    tab = 'document';
-    await openFront(thread.id, { auto: false });
+    const view = viewOf(thread.id);
+    view.tab = 'document';
+    view.chosen = true;
+    await openFront(thread.id);
     toast(doc.reused
       ? `${doc.filename} was already in the library — opened REC ${pad(thread.id)}`
       : `${doc.filename} stored · ${doc.chars.toLocaleString()} chars · REC ${pad(thread.id)}`);
@@ -1374,11 +1692,17 @@ el.replaceFile.addEventListener('change', async () => {
     }
     // The outgoing content is not lost: it stays as its own version, which is
     // the whole reason to offer the diff right here.
-    diffTo = out.version;
-    diffFrom = Math.max(1, out.version - 1);
+    const view = viewOf(threadId);
+    view.diffTo = out.version;
+    view.diffFrom = Math.max(1, out.version - 1);
     toast(`Filed as v${out.version} — the previous text is kept`, 'ok', {
       label: 'REVIEW CHANGES',
-      onClick: async () => { tab = 'versions'; await openFront(threadId, { auto: false }); showDiff(docId); },
+      onClick: async () => {
+        view.tab = 'versions';
+        view.chosen = true;
+        await openFront(threadId);
+        showDiff(threadId, docId);
+      },
     });
   } catch (err) {
     toast(`Replace failed — ${err.message}`, 'err');
@@ -1487,13 +1811,19 @@ el.rewriteGo.addEventListener('click', async () => {
     // The version count and newest-version number live on the record, so its
     // cache has to go as well or the tab keeps advertising the old count.
     recordCache.delete(id);
-    diffTo = saved.version;
-    diffFrom = Math.max(1, saved.version - 1);
-    await openFront(id, { auto: false });
+    const view = viewOf(id);
+    view.diffTo = saved.version;
+    view.diffFrom = Math.max(1, saved.version - 1);
+    await openFront(id);
 
     toast(`Rewrite filed as v${saved.version} · ${rewritten.length} chars from ${model}`, 'ok', {
       label: 'REVIEW CHANGES',
-      onClick: async () => { tab = 'versions'; await openFront(id, { auto: false }); showDiff(docId); },
+      onClick: async () => {
+        view.tab = 'versions';
+        view.chosen = true;
+        await openFront(id);
+        showDiff(id, docId);
+      },
     });
   } catch (err) {
     toast(err.message.includes('identical')
@@ -1519,7 +1849,7 @@ async function renameRecord(id) {
       body: JSON.stringify({ title }),
     });
     await refreshArchive({ keep: id, drop: id });
-    await openFront(id, { auto: false });
+    await openFront(id);
     toast(`REC ${pad(id)} renamed`);
   } catch (err) { toast(`Rename failed — ${err.message}`, 'err'); }
 }
@@ -1533,8 +1863,12 @@ async function removeRecord(id) {
   });
   if (ok == null) return;
   try {
+    // A record cannot outlive its own turn: the stream would keep writing into
+    // a thread the server has already dropped.
+    sessions.get(id)?.ac.abort();
     await api(`/api/threads/${id}`, { method: 'DELETE' });
     recordCache.delete(id);
+    views.delete(id);
     await refreshArchive({ drop: id });
     toast(`REC ${pad(id)} deleted`);
   } catch (err) { toast(`Delete failed — ${err.message}`, 'err'); }
@@ -1553,7 +1887,7 @@ async function renameDocument(id, doc) {
     // Every record bound to this document shows the old name, so the whole
     // deck is re-read rather than the one window patched.
     await refreshArchive({ keep: id, drop: id });
-    await openFront(id, { auto: false });
+    await openFront(id);
     toast(`Renamed to ${filename}`);
   } catch (err) { toast(`Rename failed — ${err.message}`, 'err'); }
 }
@@ -1569,9 +1903,9 @@ async function removeDocument(id, doc) {
     await api(`/api/documents/${doc.id}`, { method: 'DELETE' });
     docCache.delete(doc.id);
     versionCache.delete(doc.id);
-    tab = 'transcript';
+    viewOf(id).tab = 'transcript';
     await refreshArchive({ keep: id, drop: id });
-    await openFront(id, { auto: false });
+    await openFront(id);
     toast(`${doc.filename} removed from the library`);
   } catch (err) { toast(`Remove failed — ${err.message}`, 'err'); }
 }
@@ -1587,9 +1921,9 @@ async function removeVersion(id, doc, version) {
     await api(`/api/documents/${doc.id}/versions/${version}`, { method: 'DELETE' });
     versionCache.delete(doc.id);
     docCache.delete(doc.id);
-    diffTo = null;
+    viewOf(id).diffTo = null;
     await refreshArchive({ keep: id, drop: id });
-    await openFront(id, { auto: false });
+    await openFront(id);
     toast(`v${version} removed`);
   } catch (err) { toast(`Remove failed — ${err.message}`, 'err'); }
 }
@@ -1609,14 +1943,20 @@ async function fileMessageAsVersion(id, rec, messageId) {
     });
     versionCache.delete(rec.document.id);
     recordCache.delete(id);
-    diffTo = saved.version;
-    diffFrom = Math.max(1, saved.version - 1);
+    const view = viewOf(id);
+    view.diffTo = saved.version;
+    view.diffFrom = Math.max(1, saved.version - 1);
     // Re-read the record so the VERSIONS tab shows the count it now has,
     // rather than waiting for the user to go and look.
-    await openFront(id, { auto: false });
+    await openFront(id);
     toast(`Filed as v${saved.version} · ${message.content.length.toLocaleString()} chars`, 'ok', {
       label: 'REVIEW CHANGES',
-      onClick: async () => { tab = 'versions'; await openFront(id, { auto: false }); showDiff(rec.document.id); },
+      onClick: async () => {
+        view.tab = 'versions';
+        view.chosen = true;
+        await openFront(id);
+        showDiff(id, rec.document.id);
+      },
     });
   } catch (err) {
     toast(err.message.includes('identical')
@@ -1630,44 +1970,67 @@ async function fileMessageAsVersion(id, rec, messageId) {
 /**
  * Send, retry and edit all come down to the same thing: an SSE stream that
  * writes one exchange into the record it belongs to. The differences are which
- * endpoint opens it and which turns have to be cleared out of the way first —
- * a retry replaces the tail, an edit replaces everything from the edited
- * question onwards, a plain send replaces nothing.
+ * endpoint opens it, and which turns it replaces — a retry replaces the tail,
+ * an edit replaces everything from the edited question onwards, a plain send
+ * replaces nothing.
  *
- * The stream is deliberately not bound to the front of the deck. You can walk
- * away from a record mid-answer; the turn keeps running, the server keeps
- * writing it down, and the record has it when you come back.
+ * The stream is bound to the record, never to a window. Nothing here holds a
+ * DOM node: tokens land in the session and the screen is asked to redraw. So
+ * you can send in one record, travel to the next and send there too, watch both
+ * fill in from the traffic panel, and come back to either one mid-sentence —
+ * the deck can be rebuilt underneath a running turn as many times as it likes.
  */
-async function runTurn(id, url, body) {
-  if (turns.has(id)) return toast(`REC ${pad(id)} is already answering — halt it first`, 'err');
+async function runTurn(id, url, body, { replacesFrom = null } = {}) {
+  if (sessions.has(id)) return toast(`REC ${pad(id)} is already answering — halt it first`, 'err');
 
   // A message means nothing on a diff or a document face, so the record is
-  // turned to its transcript before anything is streamed into it.
-  if (tab !== 'transcript') { tab = 'transcript'; await openFront(id, { auto: false }); }
-
-  const win = winEls.get(id);
-  const pane = win?.querySelector('.winBody');
-  pane?.querySelector('.notice')?.remove();
+  // turned to its transcript — its own, not the deck's. Another record can be
+  // sitting on its DOCUMENT at the same time and must be left there.
+  const v = viewOf(id);
+  v.tab = 'transcript';
+  v.chosen = true;
+  v.stick = true;
+  v.editing = null;
 
   const ac = new AbortController();
-  turns.set(id, ac);
-  composerBusy(win, true);
-
-  let live = null;         // the assistant bubble being written into
-  let answer = '';
-  let thinking = 0;
-  let lastSaid = '';
-  const say = (text, working = false) => {
-    lastSaid = text;
-    const stageEl = win?.querySelector('.composerStage');
-    if (stageEl) {
-      stageEl.textContent = text;
-      stageEl.classList.toggle('working', working);
-    }
+  const s = {
+    ac,
+    status: 'running',
+    stage: 'sending…',
+    working: true,
+    answer: '',
+    reasoning: '',
+    thinkOpen: false,
+    user: null,
+    model: body.model || cfg?.model || 'MODEL',
+    replacesFrom,
+    startedAt: Date.now(),
   };
-  const stick = () => { if (pane) pane.scrollTop = pane.scrollHeight; };
+  sessions.set(id, s);
 
-  say('sending…', true);
+  const say = (text, working = false) => { s.stage = text; s.working = working; repaint(id); };
+
+  // The transcript gained or lost whole turns, so it is rebuilt rather than
+  // patched. Cheap, and it goes through the one function that knows how to draw
+  // a record — stored turns and running turn together.
+  const rebuild = () => {
+    const win = winEls.get(id);
+    const rec = recordCache.get(id);
+    if (!win) return;
+    if (order[focus] !== id || viewOf(id).tab !== 'transcript' || !rec) return repaint(id);
+    win.querySelector('.winBody').innerHTML = transcriptHtml(id, rec);
+    applyScroll(win, id);
+  };
+
+  rebuild();
+  const foot = winEls.get(id)?.querySelector('.winFoot');
+  foot?.querySelector('[data-act="send"]').classList.add('hidden');
+  foot?.querySelector('[data-act="halt"]').classList.remove('hidden');
+  // The rail and the index both carry the "answering" mark, and neither is
+  // redrawn by a token — only by a turn starting or ending.
+  renderRail();
+  renderIndex(records.filter((r) => order.includes(r.id)));
+  repaint(id);
 
   try {
     const res = await fetch(url, {
@@ -1692,95 +2055,61 @@ async function runTurn(id, url, body) {
       for (const frame of frames) {
         const line = frame.split('\n').find((l) => l.startsWith('data:'));
         if (!line) continue;
-        const { type, v } = JSON.parse(line.slice(5));
+        const { type, v: payload } = JSON.parse(line.slice(5));
 
         if (type === 'user') {
           // The question comes back from the server rather than being echoed
           // locally: it now has an id, which is what every action on it needs.
-          pane?.append(liveTurn('user', 'OPERATOR', v.content, v.id));
-          live = liveTurn('assistant', body.model || cfg?.model || 'MODEL', '');
-          pane?.append(live);
-          stick();
+          s.user = { id: payload.id, content: payload.content };
+          rebuild();
         } else if (type === 'token') {
-          answer += v;
-          if (live) live.querySelector('.bubble').textContent = answer;
-          stick();
+          s.answer += payload;
+          repaint(id);
         } else if (type === 'thinking') {
-          thinking += v.length;
-          say(`reasoning · ${thinking.toLocaleString()} chars`, true);
-          // Stream the thinking into the live panel as it arrives, so the
-          // reasoning is visible while the model is still working.
-          const think = live?.querySelector('.think');
-          if (think) {
-            think.classList.remove('hidden');
-            think.querySelector('summary').textContent = `THOUGHT · ${thinking.toLocaleString()} CHARS`;
-            think.querySelector('.thinkBody').textContent += v;
-            stick();
-          }
+          s.reasoning += payload;
+          say(`reasoning · ${s.reasoning.length.toLocaleString()} chars`, true);
         } else if (type === 'stage') {
-          say(v, true);
+          say(payload, true);
         } else if (type === 'usage') {
-          if (v.totalTokens) say(`${v.totalTokens.toLocaleString()} tok`, true);
+          if (payload.totalTokens) say(`${payload.totalTokens.toLocaleString()} tok`, true);
         } else if (type === 'fallback') {
-          toast(`${v.failed} is down — ${v.next} is answering`, 'info');
+          toast(`${payload.failed} is down — ${payload.next} is answering`, 'info');
         } else if (type === 'done') {
           // `usage` on this frame is the whole record's total, not this turn's.
-          say(`answered · ${fmtTok(v.usage?.total_tokens ?? 0)} in this record`);
-          for (const note of v.fallbacks ?? []) toast(note, 'info');
+          say(`answered · ${fmtTok(payload.usage?.total_tokens ?? 0)} in this record`);
+          for (const note of payload.fallbacks ?? []) toast(note, 'info');
         } else if (type === 'error') {
-          throw new Error(v);
+          throw new Error(payload);
         }
       }
     }
+    s.status = 'done';
   } catch (err) {
     if (ac.signal.aborted) {
+      s.status = 'halted';
       say('halted');
       toast(`REC ${pad(id)} halted — what arrived is kept`, 'info');
     } else {
+      s.status = 'error';
       say('failed');
-      if (live) live.querySelector('.bubble').classList.add('errored');
       toast(err.message, 'err');
     }
   } finally {
-    turns.delete(id);
-    composerBusy(win, false);
+    // The closing line outlives the session: the composer of a record that has
+    // finished still says how its last turn went.
+    v.stage = s.stage;
+    sessions.delete(id);
     // Re-read rather than patch: the turn changed the message count, the token
     // total and — on the first message — the record's own name.
     recordCache.delete(id);
     traceCache.delete(id);
-    await refreshArchive({ keep: id });
-    if (order[focus] === id) {
-      tab = 'transcript';
-      await openFront(id, { auto: false });
-      const fresh = winEls.get(id);
-      const body2 = fresh?.querySelector('.winBody');
-      if (body2) body2.scrollTop = body2.scrollHeight;
-      // The window this turn was streamed into no longer exists — the archive
-      // was re-read to pick up the new count. Carry the closing line across, or
-      // the turn ends with the status blank and nothing says how it went.
-      const stageEl = fresh?.querySelector('.composerStage');
-      if (stageEl) stageEl.textContent = lastSaid;
-    }
+    renderTraffic();
+    renderRail();
+    // `ensure`, not `keep`: the record must survive the active query, but the
+    // deck stays wherever the user is standing. A turn finishing in a record
+    // three windows back must not drag them over to it.
+    await refreshArchive({ ensure: id });
   }
-}
-
-function liveTurn(who, label, text, msgId = null) {
-  const art = document.createElement('article');
-  art.className = `turn ${who}`;
-  if (msgId) art.dataset.msg = String(msgId);
-  art.innerHTML = `<span class="turnWho">${esc(label)} · NOW</span>
-    <details class="think hidden"><summary>THOUGHT · 0 CHARS</summary><pre class="thinkBody"></pre></details>
-    <div class="bubble"></div>`;
-  art.querySelector('.bubble').textContent = text;
-  return art;
-}
-
-function composerBusy(win, busy) {
-  const foot = win?.querySelector('.winFoot');
-  if (!foot) return;
-  foot.querySelector('[data-act="send"]').classList.toggle('hidden', busy);
-  foot.querySelector('[data-act="halt"]').classList.toggle('hidden', !busy);
-  foot.querySelector('.composerInput').disabled = busy;
 }
 
 async function sendFromComposer(id, win) {
@@ -1789,8 +2118,10 @@ async function sendFromComposer(id, win) {
   const content = input.value.trim();
   if (!content) return;
 
+  const v = viewOf(id);
   input.value = '';
   input.style.height = 'auto';
+  v.draft = '';
   await runTurn(id, `/api/threads/${id}/messages`, {
     content,
     taskId: foot.querySelector('.composerTask').value || 'chat',
@@ -1802,62 +2133,45 @@ async function sendFromComposer(id, win) {
 
 /** Run the tail of a record again. The server drops the failed reply itself. */
 async function retryTurn(id, msgId) {
-  const win = winEls.get(id);
   const rec = recordCache.get(id);
   const target = rec?.messages.find((m) => m.id === msgId);
 
-  // Clear the turns this replaces before the stream starts, so the retry does
-  // not appear underneath the failure it is retrying.
-  dropTurnsFrom(win, target?.role === 'assistant'
+  // The turns this replaces are named rather than deleted from the page, so the
+  // retry does not appear underneath the failure it is retrying — and does not
+  // reappear if the window is rebuilt while it runs.
+  const from = target?.role === 'assistant'
     ? rec.messages[rec.messages.length - 2]?.id ?? msgId
-    : msgId);
+    : msgId;
 
   await runTurn(id, `/api/threads/${id}/messages/${msgId}/retry`, {
-    model: win?.querySelector('.composerModel')?.value || undefined,
-  });
+    model: viewOf(id).model || undefined,
+  }, { replacesFrom: from });
 }
 
-/** Remove the turn with this id and every turn after it. */
-function dropTurnsFrom(win, msgId) {
-  const from = win?.querySelector(`.turn[data-msg="${msgId}"]`);
-  if (!from) return;
-  let node = from;
-  while (node) {
-    const next = node.nextElementSibling;
-    node.remove();
-    node = next;
-  }
-}
-
-function beginEdit(win, id, msgId) {
-  const art = win.querySelector(`.turn[data-msg="${msgId}"]`);
+async function beginEdit(win, id, msgId) {
   const m = recordCache.get(id)?.messages.find((x) => x.id === msgId);
-  if (!art || !m) return;
+  if (!m) return;
 
-  art.classList.add('editing');
-  art.innerHTML = `
-    <span class="turnWho">EDIT · EVERYTHING AFTER THIS IS DISCARDED</span>
-    <textarea class="editInput"></textarea>
-    <span class="turnActs">
-      <button class="winAct" data-act="editRun" data-msg="${msgId}">↻ ASK AGAIN</button>
-      <button class="winAct" data-act="editCancel">✕ CANCEL</button>
-    </span>`;
-  const input = art.querySelector('.editInput');
-  input.value = m.content;
+  // The edit is opened in the record's view rather than written into the page,
+  // so a half-rewritten question survives a trip through the rest of the deck.
+  viewOf(id).editing = { msgId, text: m.content };
+  await openFront(id);
+
+  const input = winEls.get(id)?.querySelector(`.turn[data-msg="${msgId}"] .editInput`);
+  if (!input) return;
   input.focus();
   input.setSelectionRange(input.value.length, input.value.length);
 }
 
 async function commitEdit(win, id, msgId) {
-  const input = win.querySelector(`.turn[data-msg="${msgId}"] .editInput`);
-  const content = input?.value.trim();
+  const content = viewOf(id).editing?.text.trim()
+    ?? win.querySelector(`.turn[data-msg="${msgId}"] .editInput`)?.value.trim();
   if (!content) return;
 
-  dropTurnsFrom(win, msgId);
   await runTurn(id, `/api/threads/${id}/messages/${msgId}/edit`, {
     content,
-    model: win.querySelector('.composerModel')?.value || undefined,
-  });
+    model: viewOf(id).model || undefined,
+  }, { replacesFrom: msgId });
 }
 
 /* ------------------------------------------------------- message actions */

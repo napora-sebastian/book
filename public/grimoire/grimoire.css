@@ -1029,3 +1029,97 @@ body.oracleOpen .snacks { left: calc(50% - 190px); }
   display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden;
 }
 .pickRow > .winAct { grid-column: 3 / 4; grid-row: 2 / 3; }
+
+/* ========================================================== running turns */
+
+/* A record can be answering while you read another one, so "is this thing
+   working" has to be legible from three places at once: on the window itself,
+   on its tick in the rail, and in one panel that does not belong to any
+   window at all. */
+
+.winRun {
+  flex: none;
+  font-size: 9px; color: var(--amber);
+  text-shadow: 0 0 10px var(--amberGlow);
+  animation: pulse 1.4s ease-in-out infinite;
+}
+
+.tick.busy { background: var(--amber); opacity: .95; animation: pulse 1.4s ease-in-out infinite; }
+
+/* The tail of an answer arriving in a window standing behind the front one. */
+.liveTag {
+  font-family: var(--mono); font-size: 9px; letter-spacing: .16em;
+  color: var(--amber);
+  animation: blink 1.6s ease-in-out infinite;
+}
+.preview.live {
+  border-left: 2px solid var(--amber);
+  padding-left: var(--s2);
+  color: var(--fg);
+}
+
+/* The turn being written right now. The caret is the only thing that says the
+   difference between "still arriving" and "stopped mid-sentence". */
+.turn.live .bubble.streaming::after {
+  content: "▮";
+  color: var(--cyan);
+  animation: caret 1s steps(2) infinite;
+  margin-left: 2px;
+}
+
+/* Sits directly above the readout in the same left-hand column, so the two
+   never overlap however many records are running. */
+.traffic {
+  position: fixed; left: 26px; bottom: 96px; z-index: 32;
+  display: flex; flex-direction: column; gap: 2px;
+  min-width: 232px; max-width: 300px;
+  padding: var(--s2) var(--s3);
+  background: rgba(6, 26, 40, .58);
+  backdrop-filter: blur(8px);
+  border: 1px solid var(--edgeSoft);
+  border-left: 2px solid var(--amber);
+  box-shadow: 0 0 26px rgba(0, 0, 0, .45);
+}
+.trafficHead {
+  font-family: var(--mono); font-size: 9px; letter-spacing: .18em;
+  color: var(--amber);
+  margin-bottom: 3px;
+}
+.trafficRow {
+  display: flex; align-items: center; gap: var(--s2);
+  font-family: var(--mono); font-size: 9.5px; letter-spacing: .08em;
+  color: var(--fgSoft);
+}
+.trafficRow.here .trafficGo { color: var(--cyan); }
+.trafficGo {
+  flex: none;
+  font: inherit; letter-spacing: .12em; color: var(--amber);
+  background: none; border: 0; padding: 0; cursor: pointer;
+}
+.trafficGo:hover { text-decoration: underline; }
+.trafficStage {
+  flex: 1; min-width: 0;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.trafficLen { flex: none; color: var(--dim); }
+.trafficStop {
+  flex: none;
+  font: inherit; color: var(--dim);
+  background: none; border: 0; padding: 0 2px; cursor: pointer;
+}
+.trafficStop:hover { color: var(--alert); }
+
+/* The console's left column disappears on a narrow deck; this goes with it
+   rather than landing on top of the windows. */
+@media (max-width: 1100px) { .traffic { display: none; } }
+
+@media (prefers-reduced-motion: reduce) {
+  .winRun, .tick.busy, .liveTag, .turn.live .bubble.streaming::after { animation: none !important; }
+}
+
+/* A rewrite now renders as a whole turn rather than being typed into one, so it
+   needs the full width the textarea always wanted. */
+.turn.editing { max-width: min(96%, 84ch); align-self: stretch; align-items: stretch; }
+
+.winMeta .live, .cardMeta .live { color: var(--amber); animation: blink 1.6s ease-in-out infinite; }
+@media (prefers-reduced-motion: reduce) { .winMeta .live, .cardMeta .live { animation: none; } }
