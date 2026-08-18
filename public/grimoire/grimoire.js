@@ -100,6 +100,7 @@ function viewOf(id) {
       draft: '', task: null, model: null, version: null,
       diffFrom: null, diffTo: null,
       editing: null,      // { msgId, text } while a question is being rewritten
+      docEdit: null,      // { text } while the document's own text is being corrected
       stage: '',          // the composer's last status line, after its turn has ended
     };
     views.set(id, v);
@@ -572,7 +573,7 @@ async function renderTab(win, id, rec) {
 
   try {
     if (v.tab === 'transcript') show(transcriptHtml(id, rec));
-    else if (v.tab === 'document') show(await documentHtml(rec));
+    else if (v.tab === 'document') show(await documentHtml(id, rec));
     else if (v.tab === 'versions') show(await versionsHtml(id, rec));
     else if (v.tab === 'traces') show(await tracesHtml(id));
   } catch (err) {
@@ -599,7 +600,7 @@ function applyScroll(win, id) {
 
 /* ------------------------------------------------------------ record faces */
 
-async function documentHtml(rec) {
+async function documentHtml(id, rec) {
   const doc = rec.document;
   if (!docCache.has(doc.id)) {
     const { text } = await api(`/api/documents/${doc.id}/text`);
@@ -607,11 +608,34 @@ async function documentHtml(rec) {
   }
   const text = docCache.get(doc.id);
   const v = doc.newest ?? doc.versions;
+  const edit = viewOf(id).docEdit;
+
+  // Correcting the document is a face of this same tab, not a dialog over it.
+  // The text a record is answered from is the text on screen, so the place you
+  // notice the typo is the place you fix it — and the fix is filed as a version
+  // like a replaced upload or a model's rewrite, never applied silently.
+  if (edit) {
+    return `
+      <div class="tools">
+        <button class="winAct" data-act="docEditSave">✓ SAVE AS V${v + 1}</button>
+        <button class="winAct" data-act="docEditCancel">✕ CANCEL</button>
+        <span class="toolsMeta">EDITING ${esc(String(doc.filename).toUpperCase())}${
+          edit.text === edit.from ? '' : ' · UNSAVED'}</span>
+      </div>
+      <p class="hintLine">${doc.kind === 'pdf'
+        ? 'THE EXTRACTED TEXT — THE STORED PDF PAGES STAY AS THEY WERE UPLOADED. '
+        : ''}${edit.seededFrom != null && edit.seededFrom !== v
+        ? `STARTED FROM V${edit.seededFrom} — SAVING FILES IT AS V${v + 1}. `
+        : ''}EVERY RECORD ON THIS DOCUMENT IS ANSWERED FROM THIS TEXT</p>
+      <textarea class="docEdit" spellcheck="false">${esc(edit.text)}</textarea>`;
+  }
+
   return `
     <div class="tools">
       <button class="winAct" data-act="copyDoc">⧉ COPY</button>
       <a class="winAct" href="/api/documents/${doc.id}/versions/${v}/docx" data-act="dl">⤓ DOCX</a>
       <a class="winAct" href="/api/documents/${doc.id}/versions/${v}/rtf" data-act="dl">⤓ RTF</a>
+      <button class="winAct" data-act="editDoc">✎ EDIT TEXT</button>
       <button class="winAct" data-act="renameDoc">✎ RENAME</button>
       <button class="winAct" data-act="replaceDoc">⇄ REPLACE</button>
       <button class="winAct danger" data-act="removeDoc">✕ REMOVE</button>
@@ -651,6 +675,8 @@ async function versionsHtml(id, rec) {
         <button class="winAct" data-act="to" data-v="${v.version}">TO</button>
         <a class="winAct" href="/api/documents/${doc.id}/versions/${v.version}/docx" data-act="dl">⤓ DOCX</a>
         <a class="winAct" href="/api/documents/${doc.id}/versions/${v.version}/rtf" data-act="dl">⤓ RTF</a>
+        <button class="winAct" data-act="editVersion" data-v="${v.version}"
+                title="Open this version's text in the editor — saving files the result as the newest version">✎ EDIT</button>
         <button class="winAct danger" data-act="rmVersion" data-v="${v.version}">✕</button>
       </span>
     </div>`).join('');
@@ -1034,6 +1060,10 @@ el.deck.addEventListener('click', (e) => {
     el.replaceFile.click();
   }
   if (act === 'removeDoc' && rec?.document) removeDocument(id, rec.document);
+  if (act === 'editDoc' && rec?.document) beginDocEdit(id, rec.document);
+  if (act === 'docEditSave' && rec?.document) commitDocEdit(id, rec.document);
+  if (act === 'docEditCancel') cancelDocEdit(id);
+  if (act === 'editVersion' && rec?.document) beginDocEdit(id, rec.document, Number(el2.dataset.v));
   if (act === 'rmVersion' && rec?.document) removeVersion(id, rec.document, Number(el2.dataset.v));
   if (act === 'fileVersion' && rec?.document) fileMessageAsVersion(id, rec, Number(el2.dataset.msg));
 
@@ -1081,6 +1111,22 @@ el.deck.addEventListener('input', (e) => {
   }
   const edit = e.target.closest('.editInput');
   if (edit && viewOf(id).editing) viewOf(id).editing.text = edit.value;
+
+  // Same contract for the document editor: what is typed lives in the view, so
+  // travelling to another record and back finds the correction still there.
+  const docBox = e.target.closest('.docEdit');
+  const docEdit = docBox ? viewOf(id).docEdit : null;
+  if (docEdit) {
+    const was = docEdit.text !== docEdit.from;
+    docEdit.text = docBox.value;
+    // The toolbar carries the unsaved mark, and only it is patched: redrawing
+    // the tab on a keystroke would rebuild the textarea under the caret.
+    const now = docEdit.text !== docEdit.from;
+    if (now !== was) {
+      const meta = win.querySelector('.toolsMeta');
+      if (meta) meta.textContent = meta.textContent.replace(/ · UNSAVED$/, '') + (now ? ' · UNSAVED' : '');
+    }
+  }
 });
 
 el.deck.addEventListener('change', (e) => {
@@ -1922,6 +1968,89 @@ async function removeDocument(id, doc) {
     await openFront(id);
     toast(`${doc.filename} removed from the library`);
   } catch (err) { toast(`Remove failed — ${err.message}`, 'err'); }
+}
+
+/* ------------------------------------------------- correcting the document */
+
+/*
+ * The document is not read-only just because it arrived as a file. A record is
+ * answered from `documents.text`, so that text is the thing to correct — and
+ * correcting it here files a version exactly as a re-upload or a model rewrite
+ * would, which is what keeps "I fixed a typo" and "the model redrafted it" the
+ * same reviewable kind of change.
+ */
+
+async function beginDocEdit(id, doc, version = null) {
+  try {
+    // Seeding from an older version is how "go back to v2 with these three
+    // fixes" stays one pass instead of a download, an edit and a re-upload.
+    // It is still saved forward as the newest version, never in place.
+    let text;
+    if (version != null && version !== (doc.newest ?? doc.versions)) {
+      const res = await fetch(`/api/documents/${doc.id}/versions/${version}/text`);
+      if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || res.statusText);
+      text = await res.text();
+    } else {
+      if (!docCache.has(doc.id)) {
+        const { text: stored } = await api(`/api/documents/${doc.id}/text`);
+        docCache.set(doc.id, stored);
+      }
+      text = docCache.get(doc.id);
+    }
+    const v = viewOf(id);
+    v.docEdit = { text, from: text, seededFrom: version };
+    v.tab = 'document';
+    v.chosen = true;
+    v.scrollTop = 0;
+    await openFront(id);
+    winEls.get(id)?.querySelector('.docEdit')?.focus();
+  } catch (err) { toast(`Could not open the editor — ${err.message}`, 'err'); }
+}
+
+async function cancelDocEdit(id) {
+  const v = viewOf(id);
+  if (v.docEdit && v.docEdit.text !== v.docEdit.from) {
+    const ok = await openModal({
+      title: 'DISCARD EDIT',
+      what: 'The changes typed into this document have not been saved. They will be lost.',
+      ok: 'DISCARD', danger: true,
+    });
+    if (ok == null) return;
+  }
+  v.docEdit = null;
+  await openFront(id);
+}
+
+async function commitDocEdit(id, doc) {
+  const v = viewOf(id);
+  const edit = v.docEdit;
+  if (!edit) return;
+
+  if (!edit.text.trim()) {
+    return toast('An empty document is a deletion — use REMOVE for that', 'err');
+  }
+  // Not compared against the seed here: reverting to an older version leaves
+  // the textarea untouched and is still a change to the live document. The
+  // server owns that judgement and reports it back as `unchanged`.
+  try {
+    const saved = await api(`/api/documents/${doc.id}/text`, {
+      method: 'PUT', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ text: edit.text }),
+    });
+    v.docEdit = null;
+    if (saved.unchanged) {
+      await openFront(id);
+      return toast('Nothing changed — the text is identical', 'info');
+    }
+    // Every record bound to this document now shows a stale length and a stale
+    // version count, so the archive is re-read rather than this one window patched.
+    docCache.delete(doc.id);
+    versionCache.delete(doc.id);
+    recordCache.delete(id);
+    await refreshArchive({ keep: id, drop: id });
+    await openFront(id);
+    toast(`Saved as v${saved.version} · +${saved.additions} −${saved.deletions}`);
+  } catch (err) { toast(`Save failed — ${err.message}`, 'err'); }
 }
 
 async function removeVersion(id, doc, version) {

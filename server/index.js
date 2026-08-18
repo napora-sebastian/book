@@ -376,6 +376,41 @@ app.get('/api/documents/:id/text', (req, res) => {
   res.json({ filename: doc.filename, kind: doc.kind, text: doc.text });
 });
 
+/**
+ * Hand-edit a document's text. Same contract as a re-upload — the outgoing text
+ * stays behind as its own version — except the new text arrives from a textarea
+ * rather than a file, so every view that can show a document can also correct
+ * one. Every thread reading this document sees the edit on its next turn.
+ */
+app.put('/api/documents/:id/text', (req, res) => {
+  const id = Number(req.params.id);
+  if (!db.getDocument(id)) return res.status(404).json({ error: 'No such document.' });
+
+  const text = typeof req.body?.text === 'string' ? req.body.text : null;
+  if (text == null) return res.status(400).json({ error: 'text is required.' });
+  // An empty document is not an edit, it is a deletion with the entry left
+  // behind — and there is a route for that which says so.
+  if (!text.trim()) return res.status(400).json({ error: 'text cannot be empty — delete the document instead.' });
+
+  let result;
+  try {
+    result = db.editDocumentText(id, { text });
+  } catch (err) {
+    if (String(err.message).includes('UNIQUE constraint failed')) {
+      return res.status(409).json({ error: 'This exact content already exists as another document in the library.' });
+    }
+    throw err;
+  }
+
+  res.json({
+    ...withoutText(result.doc),
+    version: result.version,
+    unchanged: result.unchanged,
+    additions: result.additions,
+    deletions: result.deletions,
+  });
+});
+
 /** Raw bytes for the preview modal — only PDFs need this; docx/text preview from the extracted text. */
 app.get('/api/documents/:id/file', (req, res) => {
   const file = db.getDocumentFile(Number(req.params.id));

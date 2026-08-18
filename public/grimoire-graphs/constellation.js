@@ -187,6 +187,9 @@ const post = (url, body) => api(url, {
 const patch = (url, body) => api(url, {
   method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body ?? {}),
 });
+const put = (url, body) => api(url, {
+  method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body ?? {}),
+});
 const del = (url) => api(url, { method: 'DELETE' });
 
 const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => (
@@ -900,7 +903,11 @@ async function openPoint(id) {
     el.inspLog.innerHTML = `<p class="logNote">
       EVERY CONVERSATION BRANCHED OFF THIS POINT IS ANSWERED FROM ${esc(String(n.doc_filename ?? '').toUpperCase())}<br>
       AT ${n.doc_version == null ? `ITS NEWEST DRAFT (V${drafts[0]})` : `V${pinnedVersion(n)}`}.<br><br>
-      CHANGE THE VERSION ON THE CARD TO ARGUE TWO DRAFTS IN PARALLEL.</p>`;
+      CHANGE THE VERSION ON THE CARD TO ARGUE TWO DRAFTS IN PARALLEL.</p>
+      <div class="docActs">
+        <button class="hudBtn" data-act="readDoc">▤ READ IT</button>
+        <button class="hudBtn" data-act="editDoc">✎ EDIT TEXT</button>
+      </div>`;
     return;
   }
 
@@ -981,6 +988,9 @@ async function refreshSources() {
           ${direct ? '' : '↳ '}${esc(p.name)}${p.version != null ? ` v${p.version}` : ''}
         </span>
         <span class="srcSize">${fmtNum(p.chars)}c</span>
+        ${p.kind === 'document' ? `
+          <button class="turnAct" data-editdoc="${p.nodeId}"
+                  title="Correct this book's text — filed as a new version">✎</button>` : ''}
         ${direct ? `
           <select class="srcMode" data-edge="${edge.id}" title="What this line carries">
             <option value="full"${edge.mode === 'full' ? ' selected' : ''}>WHOLE</option>
@@ -1012,6 +1022,19 @@ el.sources.addEventListener('change', async (ev) => {
 });
 
 el.sources.addEventListener('click', async (ev) => {
+  // The books this point reads are editable from the list that names them —
+  // noticing a typo in a source and having to go find its card is the long way
+  // round to the same write.
+  const edit = ev.target.closest('[data-editdoc]');
+  if (edit) {
+    const n = byNode.get(Number(edit.dataset.editdoc));
+    if (n?.document_id == null) return;
+    return void openDocEditor({
+      documentId: n.document_id, filename: n.doc_filename, kind: n.doc_kind,
+      seedVersion: n.doc_version ?? null, newest: n.doc_newest,
+    });
+  }
+
   const cut = ev.target.closest('[data-cut]');
   if (cut) {
     try {
@@ -1034,6 +1057,96 @@ el.sources.addEventListener('click', async (ev) => {
     });
   }
 });
+
+/* ------------------------------------------------- reading and correcting */
+
+/*
+ * A book on this canvas is not a fixed object. Every point branched off it is
+ * answered from `documents.text`, so that text is the thing there is to
+ * correct — and correcting it here files a version exactly as a re-upload or a
+ * model's rewrite does. The drafts stay one rail, and nothing changes silently
+ * underneath the points already reading it.
+ */
+
+/** The text a document holds, at the version the point is pinned to. */
+async function documentText(documentId, version, newest) {
+  if (version == null || version === newest) {
+    return (await api(`/api/documents/${documentId}/text`)).text;
+  }
+  const res = await fetch(`/api/documents/${documentId}/versions/${version}/text`);
+  if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || res.statusText);
+  return res.text();
+}
+
+async function readDocument({ documentId, filename, version, newest }) {
+  try {
+    const text = await documentText(documentId, version, newest);
+    openSheet({
+      title: `${String(filename ?? '').toUpperCase()}${version != null && version !== newest ? ` · V${version}` : ''}`,
+      body: `<div class="srcPreview">${esc(text)}</div>`,
+      acts: [{ label: '✎ EDIT TEXT', run: () => openDocEditor({ documentId, filename, seedVersion: version, newest }) }],
+    });
+  } catch (err) { toast(err.message, 'err'); }
+}
+
+async function openDocEditor({ documentId, filename, kind = null, seedVersion = null, newest = null }) {
+  const seeded = seedVersion != null && seedVersion !== newest;
+
+  let text;
+  try {
+    text = await documentText(documentId, seedVersion, newest);
+  } catch (err) { return toast(err.message, 'err'); }
+
+  // Two things the editor must not let anyone assume: that a PDF's pages change
+  // with its text layer, and that editing an older draft edits it in place.
+  const notes = [];
+  if (kind === 'pdf') notes.push('Editing the extracted text — the stored PDF pages stay as they were uploaded.');
+  if (seeded) notes.push(`Starting from v${seedVersion}; saving files the result as the newest version.`);
+  notes.push('Every point branched off this book is answered from this text.');
+
+  openSheet({
+    title: `EDIT · ${String(filename ?? '').toUpperCase()}`,
+    body: `<p class="modalWhat">${esc(notes.join(' '))}</p>
+           <textarea class="docEditor" spellcheck="false"></textarea>`,
+    acts: [
+      { label: 'CANCEL', run: () => closeSheet() },
+      { label: 'SAVE AS NEW VERSION', run: (btn) => saveDocEditor(documentId, btn) },
+    ],
+  });
+
+  const box = el.sheetBody.querySelector('.docEditor');
+  box.value = text;
+  box.focus();
+}
+
+async function saveDocEditor(documentId, btn) {
+  const box = el.sheetBody.querySelector('.docEditor');
+  if (!box) return;
+  if (!box.value.trim()) return toast('An empty book is a deletion — remove the point instead', 'err');
+
+  const label = btn?.textContent;
+  if (btn) { btn.disabled = true; btn.textContent = 'SAVING…'; }
+  try {
+    const saved = await put(`/api/documents/${documentId}/text`, { text: box.value });
+    closeSheet();
+    if (saved.unchanged) return toast('Nothing changed — the text is identical', 'info');
+
+    // Every card carrying this book shows a stale char count and a stale draft
+    // count, and any point reading it shows a stale source size.
+    await reload();
+    host.onArchiveChanged?.();
+    if (selected != null) {
+      const n = byNode.get(selected);
+      if (n?.kind === 'document') await openPoint(selected);
+      else refreshSources();
+    }
+    toast(`Saved as v${saved.version} · +${saved.additions} −${saved.deletions}`);
+  } catch (err) {
+    toast(err.message, 'err');
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = label; }
+  }
+}
 
 function closeInspector() {
   if (selected != null) stashDraft();
@@ -1139,6 +1252,21 @@ el.inspLog.addEventListener('click', async (ev) => {
   if (!btn) return;
   const msgId = Number(btn.dataset.msg);
   const act = btn.dataset.act;
+
+  // A book's own two actions. They belong before the message lookup: a source
+  // point has no messages at all, so anything gated on one never runs there.
+  if (act === 'readDoc' || act === 'editDoc') {
+    const n = selected != null ? byNode.get(selected) : null;
+    if (n?.document_id == null) return;
+    const at = n.doc_version ?? null;
+    return void (act === 'readDoc'
+      ? readDocument({ documentId: n.document_id, filename: n.doc_filename, version: at, newest: n.doc_newest })
+      : openDocEditor({
+          documentId: n.document_id, filename: n.doc_filename, kind: n.doc_kind,
+          seedVersion: at, newest: n.doc_newest,
+        }));
+  }
+
   const m = inspected?.messages.find((x) => x.id === msgId);
   if (!m) return;
 
@@ -1600,7 +1728,9 @@ function openSheet({ title, body, acts = [], onPick = null }) {
     const btn = document.createElement('button');
     btn.className = `hudBtn${a.danger ? ' danger' : ''}`;
     btn.textContent = a.label;
-    btn.addEventListener('click', () => a.run());
+    // The button is handed to its own action so a slow write can disable it and
+    // say so, rather than leaving a live button over an in-flight save.
+    btn.addEventListener('click', () => a.run(btn));
     el.sheetActs.append(btn);
   }
   el.sheet.classList.remove('hidden');

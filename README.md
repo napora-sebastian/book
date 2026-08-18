@@ -746,6 +746,7 @@ large document, a cache hit shows up as a dramatically lower TTFT on later turns
 | `GET` | `/api/config` | models, tasks, cluster reachability, store stats |
 | `POST` | `/api/documents` | upload + extract + save (multipart `file`) |
 | `GET` | `/api/documents` | library listing (no text) |
+| `PUT` | `/api/documents/:id/text` | hand-edit the text; files it as the next version |
 | `DELETE` | `/api/documents/:id` | remove from library |
 | `GET` | `/api/threads` | sidebar listing |
 | `POST` | `/api/threads` | create, optionally bound to `documentId` |

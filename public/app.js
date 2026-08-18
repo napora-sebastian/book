@@ -17,7 +17,7 @@ const el = {
   versionsOverlay: $('versionsOverlay'), versionsTitle: $('versionsTitle'),
   closeVersionsSheet: $('closeVersionsSheet'), versionList: $('versionList'),
   diffFrom: $('diffFrom'), diffTo: $('diffTo'), diffStat: $('diffStat'), diffView: $('diffView'),
-  backToPreview: $('backToPreview'),
+  backToPreview: $('backToPreview'), versionsEdit: $('versionsEdit'),
   copyOldVersion: $('copyOldVersion'), copyNewVersion: $('copyNewVersion'),
   dlOldPdf: $('dlOldPdf'), dlNewPdf: $('dlNewPdf'),
   dlOldDocx: $('dlOldDocx'), dlNewDocx: $('dlNewDocx'),
@@ -26,6 +26,8 @@ const el = {
   exportOldHint: $('exportOldHint'), exportNewHint: $('exportNewHint'),
   previewDoc: $('previewDoc'), previewOverlay: $('previewOverlay'), previewTitle: $('previewTitle'),
   previewBody: $('previewBody'), closePreviewSheet: $('closePreviewSheet'),
+  previewEdit: $('previewEdit'), previewSave: $('previewSave'),
+  previewCancel: $('previewCancel'), previewDirty: $('previewDirty'),
   removeDoc: $('removeDoc'), removeOverlay: $('removeOverlay'), removeWhat: $('removeWhat'),
   removeConfirm: $('removeConfirm'), removeError: $('removeError'),
   confirmRemove: $('confirmRemove'), cancelRemove: $('cancelRemove'),
@@ -667,8 +669,10 @@ el.previewDoc.addEventListener('click', () => {
   const doc = docCache.find((d) => String(d.id) === el.docPick.value);
   if (doc) openPreview(doc);
 });
-el.closePreviewSheet.addEventListener('click', () => {
+el.closePreviewSheet.addEventListener('click', async () => {
+  if (!(await confirmLeavingEdit())) return;
   el.previewOverlay.classList.add('hidden');
+  exitPreviewEdit();
   previewDocId = null;
 });
 
@@ -683,9 +687,11 @@ let previewDocId = null;
  */
 async function openPreview(doc) {
   previewDocId = doc.id;
+  previewKind = doc.kind;
   el.previewOverlay.classList.remove('hidden');
   el.previewTitle.textContent = `Preview · ${doc.filename}`;
   el.previewBody.innerHTML = '<div class="diffEmpty">loading…</div>';
+  exitPreviewEdit();
 
   if (doc.kind === 'pdf') {
     // The raw file route serves the exact bytes; the iframe hands off to the
@@ -702,6 +708,167 @@ async function openPreview(doc) {
   } catch (err) {
     el.previewBody.innerHTML = `<div class="diffEmpty">${escapeHtml(err.message)}</div>`;
   }
+}
+
+/* ------------------------------------------------------- editing a document */
+
+/*
+ * Reading and correcting are two modes of one sheet rather than two dialogs.
+ * The text the models answer from is the text on screen, so the place you
+ * noticed the typo is the place you fix it — and the fix is filed as a version
+ * like a re-upload or a model rewrite, so nothing changes silently underneath
+ * the threads already reading this document.
+ */
+
+// The kind of the document the preview holds, so the editor knows whether it
+// is correcting a text layer (pdf) or the document itself.
+let previewKind = null;
+let previewEditing = false;
+
+function setPreviewEditing(on) {
+  previewEditing = on;
+  el.previewEdit.classList.toggle('hidden', on);
+  el.previewSave.classList.toggle('hidden', !on);
+  el.previewCancel.classList.toggle('hidden', !on);
+  if (!on) el.previewDirty.classList.add('hidden');
+}
+
+/** Drop out of edit mode without touching what is on screen. */
+function exitPreviewEdit() {
+  if (previewEditing) setPreviewEditing(false);
+  else el.previewDirty.classList.add('hidden');
+}
+
+const previewTextarea = () => el.previewBody.querySelector('.previewEdit');
+
+/** True to continue — asks first when an unsaved edit would be thrown away. */
+async function confirmLeavingEdit() {
+  const box = previewTextarea();
+  if (!previewEditing || !box || box.value === previewEditOriginal) return true;
+  return askConfirm({
+    title: 'Discard the edit?',
+    body: 'The changes typed into this document have not been saved. They will be lost.',
+    confirmLabel: 'Discard',
+  });
+}
+
+// The text as it was when editing began, so "did anything change" is a
+// comparison rather than a guess, and Cancel can put it back.
+let previewEditOriginal = '';
+
+/**
+ * Put the preview into edit mode. `seed` is the text to start from — the stored
+ * document by default, or an older version when the editor was opened from the
+ * history rail, which makes "go back to v2 with these three fixes" one pass.
+ */
+async function beginPreviewEdit({ seed = null, seedLabel = null } = {}) {
+  if (previewDocId == null) return;
+  el.previewEdit.disabled = true;
+  try {
+    // With no seed, the stored text is re-read rather than lifted off the page:
+    // a PDF's preview never held it, and a rewrite may have moved on from what
+    // the preview was last drawn from.
+    const text = seed ?? (await api(`/api/documents/${previewDocId}/text`)).text;
+    previewEditOriginal = text;
+
+    // Two things the editor must not let the user assume: that a PDF's pages
+    // change with its text layer, and that editing an old version edits it in
+    // place. Both are said here rather than discovered from the result.
+    const notes = [];
+    if (previewKind === 'pdf') {
+      notes.push(`Editing the extracted text — the stored PDF pages stay as they were uploaded.
+        This text is what every thread on this document is answered from.`);
+    }
+    if (seedLabel) notes.push(`Starting from ${seedLabel}. Saving files the result as the newest version.`);
+    const note = notes.length ? `<p class="previewNote">${notes.map(escapeHtml).join(' ')}</p>` : '';
+
+    el.previewBody.innerHTML =
+      `${note}<textarea class="previewEdit" spellcheck="false"></textarea>`;
+    const box = previewTextarea();
+    box.value = text;
+    box.addEventListener('input', () => {
+      el.previewDirty.classList.toggle('hidden', box.value === previewEditOriginal);
+    });
+    box.focus();
+    setPreviewEditing(true);
+  } catch (err) {
+    showSnackbar(err.message, 'error');
+  } finally {
+    el.previewEdit.disabled = false;
+  }
+}
+
+el.previewEdit.addEventListener('click', () => beginPreviewEdit());
+
+// The history rail's own way in: the version you are looking at, opened in the
+// editor over the preview, so a diff is never a dead end you have to re-upload
+// a file to act on.
+el.versionsEdit.addEventListener('click', async () => {
+  if (versionsDocId == null) return;
+  const docId = versionsDocId;
+  const version = diffToV;
+  const newest = versionsCache[0]?.version;
+
+  el.versionsEdit.disabled = true;
+  try {
+    const doc = docCache.find((d) => d.id === docId);
+    if (!doc) return showSnackbar('That document is no longer in the library.', 'error');
+
+    const seed = version && version !== newest ? await versionText(version) : null;
+    setPreviewReturn({ docId });
+    el.versionsOverlay.classList.add('hidden');
+    await openPreview(doc);
+    await beginPreviewEdit({ seed, seedLabel: seed ? `v${version}` : null });
+  } catch (err) {
+    showSnackbar(err.message, 'error');
+  } finally {
+    el.versionsEdit.disabled = false;
+  }
+});
+
+el.previewCancel.addEventListener('click', async () => {
+  if (!(await confirmLeavingEdit())) return;
+  setPreviewEditing(false);
+  const doc = docCache.find((d) => d.id === previewDocId);
+  if (doc) await openPreview(doc);
+});
+
+el.previewSave.addEventListener('click', async () => {
+  const box = previewTextarea();
+  if (!box || previewDocId == null) return;
+  const docId = previewDocId;
+
+  el.previewSave.disabled = true;
+  el.previewSave.textContent = 'Saving…';
+  try {
+    const saved = await saveDocumentText(docId, box.value);
+    setPreviewEditing(false);
+    const doc = docCache.find((d) => d.id === docId);
+    if (doc) await openPreview(doc);
+
+    if (saved.unchanged) return showSnackbar('Nothing changed — the text is identical.');
+    showSnackbar(`Saved as v${saved.version} · +${saved.additions} −${saved.deletions}`, 'success', {
+      label: 'See the diff',
+      onClick: () => openVersionsFromPreview(docId),
+    });
+  } catch (err) {
+    showSnackbar(err.message, 'error');
+  } finally {
+    el.previewSave.disabled = false;
+    el.previewSave.textContent = 'Save as new version';
+  }
+});
+
+/**
+ * Commit edited text and put the rest of the console back in step: the library
+ * row's char count, the thread list, and the version rail if it is open behind.
+ */
+async function saveDocumentText(docId, text) {
+  const saved = await jsonPost(`/api/documents/${docId}/text`, { text }, 'PUT');
+  await refreshDocuments(docId);
+  await refreshThreads();
+  if (!saved.unchanged) await versionFiled(docId);
+  return saved;
 }
 
 /* ------------------------------------------- Ctrl+select inline rewrite */

@@ -286,6 +286,53 @@ function ensureInitialVersion(id, doc) {
 }
 
 /**
+ * Replace a document's text with hand-edited content — same id, filename, kind
+ * and stored bytes, new text. This is the third way a document's content can
+ * change (upload replace, model rewrite, hand edit) and it files a version like
+ * the other two, so a typo fixed by hand is as reviewable as a model's draft.
+ *
+ * The uploaded bytes are deliberately left alone. A PDF cannot be re-rendered
+ * from edited text, and discarding the original to keep the two in step would
+ * throw away the only copy of what arrived. `documents.text` is what the models
+ * read and what the versions record; `documents.data` stays what was uploaded.
+ *
+ * Returns `unchanged` rather than filing a version that changed nothing.
+ */
+export function editDocumentText(id, { text }) {
+  const current = getDocument(id);
+  if (!current) return null;
+
+  const sha256 = crypto.createHash('sha256').update(text).digest('hex');
+  if (sha256 === current.sha256) {
+    return { doc: current, version: latestVersionNumber(id), unchanged: true, additions: 0, deletions: 0 };
+  }
+
+  let stat;
+  const version = inTransaction(() => {
+    // Same reason as replaceDocumentContent: a document stored before
+    // versioning existed needs its current text on the rail as version 1,
+    // or the edit would be the first version and the original unrecorded.
+    ensureInitialVersion(id, current);
+
+    const words = text.split(/\s+/).filter(Boolean).length;
+    db.prepare('UPDATE documents SET text = ?, chars = ?, words = ?, sha256 = ? WHERE id = ?')
+      .run(text, text.length, words, sha256, id);
+
+    const next = latestVersionNumber(id) + 1;
+    stat = diffStat(current.text, text);
+    insertVersion(
+      id,
+      next,
+      { filename: current.filename, kind: current.kind, text, words, pages: current.pages, bytes: current.bytes, sha256 },
+      stat,
+    );
+    return next;
+  });
+
+  return { doc: getDocument(id), version, unchanged: false, additions: stat.additions, deletions: stat.deletions };
+}
+
+/**
  * File a model's rewritten text as the next version of a document, without
  * touching the stored document itself. The model's answer is a candidate
  * revision, not the new source of truth — the user reviews it in the diff

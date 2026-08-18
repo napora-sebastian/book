@@ -709,6 +709,21 @@ tr.dDel .wch { background: var(--diffDelWord); }
   white-space: pre-wrap; word-break: break-word;
 }
 
+/* The editor is the preview's other mode: same sheet, same metrics, so
+   switching between reading and correcting does not move the text. */
+.previewEdit {
+  flex: 1; min-height: 60vh; width: 100%; box-sizing: border-box;
+  margin: 0; padding: var(--s6) var(--s7); border: 0; resize: none;
+  font: 14px/1.85 var(--sans); color: var(--fg); background: var(--bg);
+  white-space: pre-wrap; word-break: break-word;
+}
+.previewEdit:focus { outline: 2px solid var(--accent, #6ea8fe); outline-offset: -2px; }
+.previewNote {
+  padding: var(--s3) var(--s7); border-bottom: 1px solid var(--line);
+  color: var(--dim); font-size: 11.5px;
+}
+.previewDirty { align-self: center; color: var(--delFg); font-size: 11px; }
+
 /* --------------------------------------------- type-the-word confirm dialog */
 
 .confirmSheet { width: min(480px, 100%); }

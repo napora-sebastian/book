@@ -342,6 +342,12 @@ body.oracleOpen .deck { right: 372px; }
   margin: 0;
   z-index: 200;
 }
+/* Expanded, the front window's translucent glass would otherwise let the rest
+   of the stack bleed through underneath it — kill the stack entirely so the
+   expanded record is the only thing on screen. Collapsed/normal state leaves
+   this alone: peeking through to the next windows is the point of the deck. */
+.deck.expanded .win:not([data-band="front"]) { opacity: 0; pointer-events: none; }
+
 /* COLLAPSE — down to its own title bar, so the stack behind is unobstructed. */
 .deck.collapsed .win[data-band="front"] { --winH: 84px; }
 .deck.collapsed .win[data-band="front"] .winBody { display: none; }
@@ -750,6 +756,18 @@ body.oracleOpen .index { padding-right: 400px; }
   max-width: 78ch;
 }
 .docText mark { background: rgba(255, 180, 84, .25); color: var(--amber); }
+
+/* The same text, correctable. Deliberately the reading metrics of .docText and
+   not the mono of the message editor: this is a document, not a command. */
+.docEdit {
+  display: block; width: 100%; box-sizing: border-box;
+  min-height: 52vh; resize: vertical;
+  font-family: inherit; font-size: 12.5px; line-height: 1.75;
+  white-space: pre-wrap; overflow-wrap: anywhere;
+  color: var(--fg); background: rgba(2, 14, 22, .6);
+  border: 1px solid var(--cyan); outline: none;
+  padding: var(--s3); margin-top: var(--s2);
+}
 
 /* ---------------------------------------------------------------- versions */
 
