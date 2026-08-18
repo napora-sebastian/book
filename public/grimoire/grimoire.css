@@ -321,13 +321,34 @@ body.oracleOpen .deck { right: 372px; }
 
 /* EXPAND — the record takes the console; the stack stays behind it, which is
    why it is a resize and not a full-screen mode. */
+/* The stage sits at z-index 10, below the Oracle (35) and the bar (40), so an
+   expanded window inside it can never cover them. When the deck is expanded we
+   lift the whole stage above everything so the record truly takes the screen. */
+.stage:has(.deck.expanded) { z-index: 200; }
+/* Kill the camera projection while expanded so the front window renders flat
+   and dead-centre instead of being pushed around by the perspective origin. */
+.deck.expanded { perspective: none; }
 .deck.expanded .win[data-band="front"] {
-  --winW: min(1180px, 94%);
-  --winH: calc(100vh - 190px);
+  --winW: 90vw;
+  --winH: 90vh;
+  /* Drop the tilt/offset and pin to the viewport so the window sits dead-centre
+     of the whole page instead of riding the deck's perspective transform. The
+     deck has no transform/perspective while expanded, so `fixed` is viewport-
+     relative and 50vh/50vw centre it exactly. */
+  position: fixed;
+  top: 50vh;
+  left: 50vw;
+  transform: translate(-50%, -50%);
+  margin: 0;
+  z-index: 200;
 }
 /* COLLAPSE — down to its own title bar, so the stack behind is unobstructed. */
 .deck.collapsed .win[data-band="front"] { --winH: 84px; }
 .deck.collapsed .win[data-band="front"] .winBody { display: none; }
+
+/* Expanded, the record has room to breathe: let the turns spread to 80% of the
+   window instead of the 74ch cap that keeps them narrow at reading size. */
+.deck.expanded .win[data-band="front"] .turn { max-width: 80%; }
 
 /* Controls live on the front window only: acting on a record you are not
    reading is how you delete the wrong thing. */
