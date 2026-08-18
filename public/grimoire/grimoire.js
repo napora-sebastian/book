@@ -208,6 +208,7 @@ function makeWindow(rec) {
     <div class="winBody">${previewHtml(rec)}</div>
     <footer class="winFoot hidden">
       <select class="composerTask hudSelect" title="A preset instruction put in front of what you type"></select>
+      <select class="composerVersion hudSelect" title="Which version of the document goes to the model"></select>
       <textarea class="composerInput" rows="1" placeholder="SAY SOMETHING TO THIS RECORD…  [ENTER]"></textarea>
       <select class="composerModel hudSelect" title="The model that answers in this record"></select>
       <span class="composerStage"></span>
@@ -224,7 +225,7 @@ function makeWindow(rec) {
  * are talking to is the record in front — the same reason its model picker
  * writes to that thread and not to a global setting.
  */
-function fitComposer(win, id, rec) {
+async function fitComposer(win, id, rec) {
   const foot = win.querySelector('.winFoot');
   // Shown on every face of the record, not just its transcript: a record with
   // nothing said in it opens on its DOCUMENT, and hiding the composer there
@@ -242,6 +243,32 @@ function fitComposer(win, id, rec) {
     const models = cfg?.models?.length ? cfg.models : [cfg?.model].filter(Boolean);
     foot.querySelector('.composerModel').innerHTML = (models.length ? models : ['default'])
       .map((m) => `<option value="${esc(m)}">${esc(m)}</option>`).join('');
+  }
+
+  // The version picker: which saved state of the document goes to the model on
+  // the next turn. Defaults to the newest, so a plain chat still reads the
+  // current text. Only records with a document get one.
+  const verPick = foot.querySelector('.composerVersion');
+  if (rec?.document) {
+    let versions = versionCache.get(rec.document.id);
+    if (!versions) {
+      try {
+        ({ versions } = await api(`/api/documents/${rec.document.id}/versions`));
+        versionCache.set(rec.document.id, versions);
+      } catch { versions = null; }
+    }
+    if (versions?.length) {
+      const newest = versions[0]?.version ?? 1;
+      verPick.innerHTML = versions
+        .map((v) => `<option value="${v.version}">V${v.version}${v.version === newest ? ' · NEWEST' : ''}</option>`)
+        .join('');
+      verPick.value = String(newest);
+      verPick.classList.remove('hidden');
+    } else {
+      verPick.classList.add('hidden');
+    }
+  } else {
+    verPick.classList.add('hidden');
   }
 
   // A thread remembers which model answered in it; the picker has to agree, or
@@ -307,7 +334,7 @@ async function openFront(id, { auto = true } = {}) {
     .map((t) => `<button class="tab${t.id === tab ? ' on' : ''}" data-tab="${t.id}">${t.label}</button>`)
     .join('');
 
-  fitComposer(win, id, rec);
+  await fitComposer(win, id, rec);
   await renderTab(win, id, rec);
 }
 
@@ -1745,6 +1772,8 @@ async function sendFromComposer(id, win) {
     content,
     taskId: foot.querySelector('.composerTask').value || 'chat',
     model: foot.querySelector('.composerModel').value || undefined,
+    version: foot.querySelector('.composerVersion')?.value
+      ? Number(foot.querySelector('.composerVersion').value) : undefined,
   });
 }
 

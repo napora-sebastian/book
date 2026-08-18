@@ -682,7 +682,7 @@ app.get('/api/documents/:id/versions/:version/rtf', (req, res) => {
  * what makes retrying cheap: a failed turn leaves the question in the thread, so
  * the retry route replays it instead of asking the user to type it again.
  */
-async function streamTurn(res, { threadId, userMsg, history, taskId, chosenModel }) {
+async function streamTurn(res, { threadId, userMsg, history, taskId, chosenModel, version }) {
   const question = userMsg.content;
 
   res.writeHead(200, {
@@ -700,7 +700,7 @@ async function streamTurn(res, { threadId, userMsg, history, taskId, chosenModel
 
   send('user', userMsg);
 
-  const { text: docText, filename } = db.getThreadDocText(threadId);
+  const { text: docText, filename } = db.getThreadDocText(threadId, version);
   const started = Date.now();
   const traceIds = [];
   let answer = '';
@@ -829,7 +829,7 @@ app.post('/api/threads/:id/messages', asyncRoute(async (req, res) => {
   const thread = db.getThread(threadId);
   if (!thread) return res.status(404).json({ error: 'No such thread.' });
 
-  const { content, taskId = 'chat', model } = req.body || {};
+  const { content, taskId = 'chat', model, version } = req.body || {};
   const question = (content ?? '').trim();
   if (!question) return res.status(400).json({ error: 'Empty message.' });
 
@@ -846,7 +846,7 @@ app.post('/api/threads/:id/messages', asyncRoute(async (req, res) => {
     db.renameThread(threadId, question.slice(0, 60));
   }
 
-  await streamTurn(res, { threadId, userMsg, history, taskId, chosenModel });
+  await streamTurn(res, { threadId, userMsg, history, taskId, chosenModel, version });
 }));
 
 /**

@@ -442,16 +442,24 @@ export function getThread(id) {
   );
 }
 
-/** Only the inference path needs the full text, so it is fetched separately. */
-export function getThreadDocText(threadId) {
+/** Only the inference path needs the full text, so it is fetched separately.
+ *  When `version` is given, the text of that saved version is returned instead
+ *  of the document's live text — the user can point a turn at any version. */
+export function getThreadDocText(threadId, version) {
   const row = db
     .prepare(
-      `SELECT d.text, d.filename FROM threads t
+      `SELECT d.id AS document_id, d.text, d.filename FROM threads t
          JOIN documents d ON d.id = t.document_id
         WHERE t.id = ?`,
     )
     .get(threadId);
-  return row ?? { text: '', filename: null };
+  if (!row) return { text: '', filename: null };
+
+  if (version != null) {
+    const v = getDocumentVersion(row.document_id, Number(version));
+    if (v) return { text: v.text, filename: v.filename ?? row.filename };
+  }
+  return row;
 }
 
 export function getMessages(threadId) {

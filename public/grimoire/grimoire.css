@@ -941,6 +941,8 @@ body.oracleOpen .snacks { left: calc(50% - 190px); }
 .composerInput:disabled { opacity: .5; }
 .composerInput::placeholder { color: var(--dim); letter-spacing: .1em; }
 .winFoot .hudSelect { height: 30px; max-width: 108px; font-size: 9.5px; }
+.winFoot .composerVersion { max-width: 120px; color: var(--amber); }
+.winFoot .composerVersion.hidden { display: none; }
 .winFoot .hudBtn, .winFoot .ghostBtn { height: 30px; flex: none; }
 
 /* What the turn is doing right now — one line, in the composer, where the eye
