@@ -1,8 +1,28 @@
+// The model streams two separate channels, and the UI shows them as two separate
+// blocks in the thread: a collapsible "Thought" panel (reasoning) and the answer
+// body (response). The model must keep the deliverable in the response — it has
+// repeatedly done the whole job in reasoning and left the response as "Ready."
+// or empty, which the user cannot save as a version.
+const CHANNELS = `You have two separate output channels, shown to the user as two separate blocks
+in the conversation:
+
+1. REASONING — your private chain-of-thought. Use it to plan, analyse and draft.
+   It appears in a collapsible "Thought" panel, but it is NOT your answer.
+2. RESPONSE — your actual answer. This is the block the user reads and can save.
+
+The deliverable always goes in the RESPONSE. When the user asks for text — a
+rewrite, a corrected passage, the whole document — put the ENTIRE requested text
+in the RESPONSE, never in REASONING. Never leave the RESPONSE as "Ready." or
+empty while the real content sits in REASONING. REASONING may hold notes and
+drafts, but the final, complete deliverable must be in the RESPONSE.`;
+
 // Extraction and analysis: inventing anything is a defect, so say so instead.
 const ANALYST = `You are a careful document analyst running locally on a DGX Spark cluster.
 Work only from the supplied document text. If something is not in the document, say so
 rather than inventing it. Quote short spans verbatim when precision matters.
-Answer in the language of the document unless told otherwise.`;
+Answer in the language of the document unless told otherwise.
+
+${CHANNELS}`;
 
 // Authoring: the analyst prompt actively refuses this work — asked to rewrite a
 // chapter it answers "I cannot create new versions of chapters", because new
@@ -26,7 +46,9 @@ document with your changes applied, you MUST return the ENTIRE requested text �
 chapter or passage from beginning to end, with every requested change woven in — not just
 the paragraphs you changed. Never return only the edited fragments. If the requested
 passage is long, still return all of it in one response. Do not truncate, do not say "the
-rest is unchanged", do not summarise the parts you did not touch.`;
+rest is unchanged", do not summarise the parts you did not touch.
+
+${CHANNELS}`;
 
 // Plain chat is where people actually work, and it is asked both kinds of
 // question — "is the plot consistent?" one turn, "rewrite this chapter" the
@@ -50,7 +72,9 @@ document with your changes applied, you MUST return the ENTIRE requested text �
 chapter or passage from beginning to end, with every requested change woven in — not just
 the paragraphs you changed. Never return only the edited fragments. If the requested
 passage is long, still return all of it in one response. Do not truncate, do not say "the
-rest is unchanged", do not summarise the parts you did not touch.`;
+rest is unchanged", do not summarise the parts you did not touch.
+
+${CHANNELS}`;
 
 /**
  * Extraction presets must not invent, authoring must, and plain chat has to do
@@ -216,6 +240,19 @@ Read it. ${taskId === 'rewrite'
         : 'I will ask questions about it in the messages that follow.'} Reply only with "Ready."`,
     });
     messages.push({ role: 'assistant', content: 'Ready.' });
+  }
+
+  // The priming exchange above is a prefix-cache trick, not a standing order.
+  // Once the conversation has moved past the document handshake, "Reply only
+  // with Ready." no longer applies — otherwise a reasoning model does the whole
+  // job in its thinking stream and closes the response with "Ready." again.
+  if (history.length > 0) {
+    messages.push({
+      role: 'system',
+      content: 'The "Reply only with Ready." instruction above applied only to the document handshake. '
+        + 'From now on, answer the user\'s actual request in full in the RESPONSE channel. '
+        + 'Never end a response with "Ready." unless the user asks for it.',
+    });
   }
 
   for (const m of history) {
