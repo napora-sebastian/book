@@ -77,7 +77,7 @@ const fmtWhen = (iso) => {
   if (mins < 1) return 'just now';
   if (mins < 60) return `${Math.floor(mins)}m ago`;
   if (mins < 1440) return `${Math.floor(mins / 60)}h ago`;
-  return d.toLocaleDateString();
+  return d.toLocaleDateString(document.documentElement.lang || undefined);
 };
 
 const escapeHtml = (s) => String(s).replace(/[&<>"']/g, (c) =>

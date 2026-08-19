@@ -58,6 +58,7 @@ const MARKUP = `
       <button data-el="tidy" class="hudBtn" title="Lay the graph out left to right (L)">⇥ TIDY</button>
       <button data-el="fit" class="hudBtn" title="Frame everything (F)">⛶ FIT</button>
       <button data-el="linkBtn" class="hudBtn" title="Providers, keys, models and the fallback chain">⚙ LINK</button>
+      <span data-lang-mount></span>
     </div>
   </header>
 
@@ -214,7 +215,7 @@ const fmtWhen = (s) => {
   if (!s) return '—';
   const d = asDate(s);
   return Number.isNaN(+d) ? String(s)
-    : d.toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }).toUpperCase();
+    : d.toLocaleString(document.documentElement.lang || undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }).toUpperCase();
 };
 const fmtNum = (n) => (n == null ? '—' : n >= 1000 ? `${(n / 1000).toFixed(n >= 10000 ? 0 : 1)}K` : String(n));
 const fmtTok = (n) => (!n ? '0 TOK' : n >= 1000 ? `${(n / 1000).toFixed(1)}K TOK` : `${n} TOK`);

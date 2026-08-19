@@ -61,6 +61,8 @@
         <button id="renameThread" class="small" disabled>Rename</button>
         <button id="deleteThread" class="small danger" disabled>Delete</button>
         <span id="llmSettingsMount"></span>
+        <!-- English / Polish. i18n.js fills every [data-lang-mount] it finds. -->
+        <span data-lang-mount></span>
         <span id="status" class="status">checking…</span>
       </div>
     </header>
@@ -231,7 +233,7 @@
         <p class="confirmWarn">⚠ This cannot be undone.</p>
         <p id="removeWhat" class="confirmWhat"></p>
         <label class="confirmLbl" for="removeConfirm">To confirm, type <code>REMOVE</code> below</label>
-        <input id="removeConfirm" type="text" class="confirmInput" placeholder="REMOVE"
+        <input id="removeConfirm" type="text" class="confirmInput" placeholder="REMOVE" data-i18n-skip
                autocomplete="off" autocapitalize="off" spellcheck="false" />
         <div id="removeError" class="confirmError"></div>
         <div class="confirmActions">
@@ -297,7 +299,7 @@
         <p class="confirmWarn">⚠ This cannot be undone.</p>
         <p id="versionRemoveWhat" class="confirmWhat"></p>
         <label class="confirmLbl" for="versionRemoveConfirm">To confirm, type <code>REMOVE</code> below</label>
-        <input id="versionRemoveConfirm" type="text" class="confirmInput" placeholder="REMOVE"
+        <input id="versionRemoveConfirm" type="text" class="confirmInput" placeholder="REMOVE" data-i18n-skip
                autocomplete="off" autocapitalize="off" spellcheck="false" />
         <div id="versionRemoveError" class="confirmError"></div>
         <div class="confirmActions">
@@ -315,6 +317,7 @@
     import { mountLlmSettings } from '/plugins/llm-settings/llm-settings.js';
     mountLlmSettings({ mount: '#llmSettingsMount', label: '⚙ LLM' });
   </script>
+  <script src="/i18n.js" type="module"></script>
   <script src="/app.js" type="module"></script>
 </body>
 </html>

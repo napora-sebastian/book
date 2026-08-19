@@ -54,7 +54,9 @@ const fmtWhen = (s) => {
   const d = asDate(s);
   return Number.isNaN(+d)
     ? String(s)
-    : d.toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })
+    // The page's lang, not the browser's: picking Polish has to move the
+    // months and the clock with it.
+    : d.toLocaleString(document.documentElement.lang || undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })
        .toUpperCase();
 };
 const fmtTok = (n) => (!n ? '0 TOK' : n >= 1000 ? `${(n / 1000).toFixed(1)}K TOK` : `${n} TOK`);

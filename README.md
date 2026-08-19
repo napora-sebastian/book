@@ -230,6 +230,47 @@ field*: edit it, keep it, ask for another, or cancel and leave the name alone.
 Nothing is written until you confirm, and there is no endpoint that renames
 anything on its own.
 
+### English and Polish (🇬🇧 / 🇵🇱)
+
+Every route carries a pair of flags — the lab's top bar, the deck's HUD, the
+constellation's HUD, the mixed console. Clicking one switches the whole
+interface, live: no reload, and an unsent draft in the composer survives it. The
+choice is kept in `localStorage` under `spark.lang`, so it holds across reloads
+and across routes; with nothing chosen, a browser set to Polish opens in Polish.
+
+Dates follow the choice too — `18 SIE, 21:56` rather than `AUG 18, 09:56 PM` —
+because the formatters read `document.documentElement.lang`.
+
+The translation lives in two files and touches nothing else:
+
+| file | what is in it |
+| --- | --- |
+| `public/i18n.js` | the engine, the flag switch, and the list of things never to translate |
+| `public/i18n.pl.js` | ~500 phrases, plus patterns for anything with a number in it |
+
+The app builds nearly all of its interface as HTML strings, so the translation
+happens at the DOM rather than at the call site: a `MutationObserver` watches for
+nodes being added and rewrites the text nodes and the visible attributes
+(`title`, `placeholder`, `aria-label`, `alt`) whose whole content is a phrase the
+table knows. Nothing renders in halves — an unknown phrase stays in English.
+
+Two consequences are worth knowing:
+
+- **What you and the model wrote is never touched.** Messages, document text,
+  diffs, graph card previews and picker rows are named in `SKIP_SEL` at the top
+  of `public/i18n.js`, and the walker refuses to descend into them. Anything else
+  can opt out with `data-i18n-skip` — the two confirmation boxes do, because the
+  code compares what you type against the literal words `REMOVE` and `DELETE`.
+- **Every rewrite keeps the English.** Switching back is a restore, not a reverse
+  lookup, so EN → PL → EN lands exactly where it started however many times you
+  do it.
+
+Adding a language is a third file: copy `i18n.pl.js`, translate the values, and
+add it to `LANGS` and `TABLES` in `i18n.js`. Adding a phrase is one line in the
+table, keyed by the English exactly as it stands in the markup — the engine folds
+`SAVE SOURCES` down to `Save sources` to find it, and puts leading glyphs (`⁂`,
+`✎`, `←`) back afterwards, so one entry serves every place the phrase appears.
+
 ### Nothing is erased from tracing
 
 Messages leaving a thread never remove the traces of the calls that produced
