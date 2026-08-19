@@ -1333,10 +1333,15 @@ body.oracleOpen .snacks { left: calc(50% - 190px); }
   .stage { inset: 98px 0 0 0; }
 
   .deck {
-    /* A shallow fan: at full width a 50px step puts the window behind halfway
-       off the screen, which reads as a layout bug rather than as depth. */
-    --stepX: 18px;
-    --stepY: -14px;
+    /* The fan has to out-run the perspective, or there is no stack to see.
+       Each window behind is pushed --stepZ away, and perspective shrinks it by
+       1400/(1400+150) — about 10%. On a 222px-wide window that shrink alone
+       pulls its right edge 11px INSIDE the front one, so an 18px step bought a
+       5px sliver and the deck read as a single card. Stepping 30px out and 34px
+       up clears the shrink and leaves roughly 16px of edge and 12px of header
+       showing, the same read as the desktop fan at its own scale. */
+    --stepX: 30px;
+    --stepY: -34px;
     --stepZ: -150px;
     /* Windows open at 60% of the room they could take — 40% smaller than the
        full-bleed default. A phone-sized window that fills the screen turns the
