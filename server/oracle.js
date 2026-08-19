@@ -22,6 +22,7 @@ import { fileURLToPath } from 'node:url';
 
 import rawDb from './db.js';
 import * as db from './db.js';
+import { threadPart, graphPart, wrapParts } from './sources.js';
 import * as llm from './llm.js';
 import { ensureIndex, searchThreads, searchMessages } from './search.js';
 
@@ -40,6 +41,10 @@ const MAX_THREADS_IN_CATALOGUE = Number(process.env.ORACLE_CATALOGUE || 120);
 const PER_MESSAGE_CHARS = Number(process.env.ORACLE_MESSAGE_CHARS || 1_200);
 const PER_THREAD_CHARS = Number(process.env.ORACLE_THREAD_CHARS || 12_000);
 const TOTAL_EVIDENCE_CHARS = Number(process.env.ORACLE_EVIDENCE_CHARS || 60_000);
+// What the user pins to a question, all of it together. Separate from the
+// evidence budget: retrieval is the Oracle's own choice and can be trimmed,
+// a pin is an instruction — but it still cannot be unbounded.
+const GIVEN_SOURCE_CHARS = Number(process.env.ORACLE_GIVEN_CHARS || 80_000);
 // A thread's document is not part of its transcript, but it is what half the
 // threads are actually about — and a thread with no messages at all IS its
 // document. Without this the Oracle answers "the archive does not hold its
@@ -330,7 +335,7 @@ export function mountOracle(app) {
    * body: { question, history?: [{role, content}], model? }
    */
   app.post('/api/oracle/ask', async (req, res) => {
-    const { question, history = [], model, deck } = req.body || {};
+    const { question, history = [], model, deck, sources: pinned } = req.body || {};
     const ask = String(question ?? '').trim();
     if (!ask) return res.status(400).json({ error: 'Empty question.' });
 
@@ -359,6 +364,35 @@ export function mountOracle(app) {
 
     const rows = gallery();
     const catalogue = catalogueText(rows);
+
+    // Sources the user pinned to this question: conversations, and whole graphs
+    // — which retrieval cannot reach at all, since it searches transcripts and
+    // a graph is a shape over them. Pinned means given: they are in front of the
+    // planner from round one and in front of the answerer at the end, whether or
+    // not any search would have found them.
+    const givenParts = [];
+    let givenLeft = GIVEN_SOURCE_CHARS;
+    for (const raw of asArray(pinned)) {
+      const id = Number(raw?.id);
+      if (!Number.isInteger(id) || givenLeft <= 0) continue;
+      const part = raw?.kind === 'graph'
+        ? graphPart(id)
+        : threadPart({ threadId: id, mode: raw?.mode === 'last' ? 'last' : 'full' });
+      if (!part?.text?.trim()) continue;
+      // A pinned graph can be very large, and the Oracle has no map-reduce to
+      // fall back on: the pins share one ceiling, and a source that overruns it
+      // is cut rather than allowed to end the turn with a context error.
+      if (part.text.length > givenLeft) {
+        part.text = `${part.text.slice(0, givenLeft)}\n\n[cut — too large to give in full]`;
+        part.detail = `${part.detail ?? ''}${part.detail ? ', ' : ''}cut to fit`;
+      }
+      givenLeft -= part.text.length;
+      givenParts.push(part);
+    }
+    const given = givenParts.length
+      ? `<given-sources>\nThe user pinned these to the question. They are given, not retrieved — read them first.\n\n${
+        wrapParts(givenParts, { header: false, unwrapLoneBook: false }).text}\n</given-sources>`
+      : '';
     // Where the user is standing in the deck. Without it "the third one" and
     // "the next" have nothing to resolve against.
     const deckState = deckText(deck);
@@ -390,6 +424,7 @@ export function mountOracle(app) {
             content: [
               `<archive-catalogue count="${rows.length}">\n${catalogue}\n</archive-catalogue>`,
               deckState,
+              given,
               findings.length ? `<findings>\n${findings.join('\n\n')}\n</findings>` : '',
               opened.size ? `<already-open>${[...opened.keys()].map((id) => `#${id}`).join(', ')}</already-open>` : '',
               priorChat.length
@@ -492,11 +527,12 @@ export function mountOracle(app) {
           role: 'user',
           content: [
             `<archive-catalogue count="${rows.length}">\n${catalogue}\n</archive-catalogue>`,
+            given,
             evidence.length
               ? `<transcripts>\n${evidence.map((t) => t.text).join('\n\n')}\n</transcripts>`
               : '<transcripts>Nothing in the archive matched this question.</transcripts>',
             ask,
-          ].join('\n\n'),
+          ].filter(Boolean).join('\n\n'),
         },
       ];
 

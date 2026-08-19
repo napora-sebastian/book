@@ -196,6 +196,16 @@ button.destructive {
 }
 button.destructive:hover:not(:disabled) { filter: brightness(1.08); border-color: transparent; color: #fff; }
 
+/* Leaving is not the same shape as saving. Cancel and every sheet's Close said
+   so only by their words: same grey chrome as the button that writes. They read
+   red from the start now, not on hover, so the pair either side of a decision
+   are told apart before the pointer is over one — while the write beside them
+   stays the filled accent of .primary. */
+button.dismiss { color: var(--err); border-color: rgba(192, 57, 47, .30); }
+button.dismiss:hover:not(:disabled) {
+  background: var(--errSoft); border-color: var(--err); color: var(--err);
+}
+
 /* Outlined remove — matches the trash on version rows. */
 button.removeBtn { background: var(--panel); border-color: var(--line); color: var(--err); }
 button.removeBtn:hover:not(:disabled) { background: var(--errSoft); border-color: var(--err); color: var(--err); }
@@ -815,4 +825,41 @@ tr.dDel .wch { background: var(--diffDelWord); }
   .stage, .composer { padding-left: var(--s4); padding-right: var(--s4); }
   .versionList { width: 178px; }
   .previewText { padding: var(--s5); }
+}
+
+/* ------------------------------------------------------------ extra sources
+
+   The list a thread reads besides its own document. Rows are the same object as
+   a trace row — a bordered card in a scrolling sheet — with a tick at the front
+   and, for a conversation, how much of it goes.
+   -------------------------------------------------------------------------- */
+
+#sourcesBtn.on { color: var(--accent); border-color: var(--ring); background: var(--accentSoft); }
+
+.sourceList { overflow-y: auto; padding: var(--s3) var(--s5) var(--s5); }
+
+.sourceIntro { margin: 0 0 var(--s4); color: var(--dim); font-size: 12.5px; line-height: 1.5; }
+
+.sourceHead {
+  margin: var(--s4) 0 6px;
+  font: 11px var(--mono); color: var(--dim); text-transform: uppercase; letter-spacing: .06em;
+}
+
+.sourceRow {
+  display: flex; align-items: center; gap: var(--s3);
+  padding: 9px 12px; margin-bottom: 6px; cursor: pointer;
+  border: 1px solid var(--line); border-radius: var(--radiusSm); background: var(--panel);
+}
+.sourceRow:hover { border-color: var(--lineStrong); }
+.sourceRow.on { border-color: var(--ring); background: var(--accentSoft); }
+
+.sourceMain { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1; }
+.sourceName { font-size: 13px; color: var(--fg); overflow-wrap: anywhere; }
+.sourceMeta { font: 11.5px var(--mono); color: var(--dim); overflow-wrap: anywhere; }
+.sourceMode { height: var(--ctlSm); font-size: 12px; flex: none; }
+
+.sourcePreview {
+  margin: 0; padding: 10px 12px; white-space: pre-wrap; overflow-wrap: anywhere;
+  background: var(--bg); border: 1px solid var(--line); border-radius: var(--radiusSm);
+  font: 12px/1.55 var(--mono); color: var(--fgSoft);
 }

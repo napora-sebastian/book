@@ -78,6 +78,7 @@
       <h2>ORACLE</h2>
       <p class="oracleSub">semantic retrieval over the archive</p>
     </div>
+    <button id="oraclePins" class="hudBtn" title="Give the Oracle particular records and graphs to read, instead of only what it finds by searching">⁂ PIN SOURCES</button>
     <select id="oracleModel" class="hudSelect" title="Model that searches and answers"></select>
     <button id="collapseOracle" class="ghostBtn" title="Stow">–</button>
   </header>
@@ -99,7 +100,7 @@
   <form id="oracleForm" class="oracleForm">
     <textarea id="oracleInput" rows="1" placeholder="QUERY…  [ENTER]"></textarea>
     <button id="oracleSend" type="submit" class="hudBtn primary">RUN</button>
-    <button id="oracleStop" type="button" class="ghostBtn hidden">HALT</button>
+    <button id="oracleStop" type="button" class="ghostBtn quit hidden">HALT</button>
   </form>
 </aside>
 
@@ -118,7 +119,7 @@
   <input id="rewriteInstr" class="rewriteInstr" placeholder="instruction (optional)…"
          autocomplete="off" spellcheck="false" />
   <button id="rewriteGo" class="hudBtn primary">RUN</button>
-  <button id="rewriteCancel" class="ghostBtn">✕</button>
+  <button id="rewriteCancel" class="ghostBtn quit" title="Discard this rewrite">✕</button>
 </div>
 
 <!-- The wide panel: saved responses, the document picker, ground-truth findings.
@@ -127,7 +128,7 @@
   <div class="modalBox sheetBox">
     <header class="modalTop">
       <span id="sheetTitle">—</span>
-      <button id="sheetClose" class="ghostBtn">✕</button>
+      <button id="sheetClose" class="ghostBtn quit" title="Close (ESC)">✕</button>
     </header>
     <div id="sheetBody" class="sheetBody"></div>
     <footer id="sheetActs" class="modalActs"></footer>
@@ -146,7 +147,7 @@
       <p id="modalErr" class="modalErr"></p>
     </div>
     <footer class="modalActs">
-      <button id="modalCancel" class="hudBtn">CANCEL</button>
+      <button id="modalCancel" class="hudBtn quit">CANCEL</button>
       <button id="modalOk" class="hudBtn primary">CONFIRM</button>
     </footer>
   </div>

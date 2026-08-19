@@ -19,6 +19,7 @@ import {
 import * as llm from './llm.js';
 import * as db from './db.js';
 import { llmSettings } from './llm-settings.js';
+import { threadSource as attachedThreadSource, sourceSummary } from './sources.js';
 import { mountOracle } from './oracle.js';
 import { mountGraph } from './graph.js';
 
@@ -253,7 +254,9 @@ app.post('/api/documents/:id/replace', upload.single('file'), asyncRoute(async (
     ...withoutText(result.doc),
     reused: false,
     version: result.version,
-    unchanged: result.unchanged,
+    identical: result.identical,
+    additions: result.additions,
+    deletions: result.deletions,
     warnings: extracted.warnings ?? [],
   });
 }));
@@ -405,7 +408,7 @@ app.put('/api/documents/:id/text', (req, res) => {
   res.json({
     ...withoutText(result.doc),
     version: result.version,
-    unchanged: result.unchanged,
+    identical: result.identical,
     additions: result.additions,
     deletions: result.deletions,
   });
@@ -516,6 +519,49 @@ app.post('/api/threads/:id/saved-responses', (req, res) => {
 
 app.delete('/api/saved-responses/:id', (req, res) => {
   res.json({ deleted: db.deleteSavedResponse(Number(req.params.id)) });
+});
+
+/* ------------------------------------------------------------- extra sources
+
+   Every screen that talks to the model can hand the conversation more to read
+   than its own book: other conversations, and whole graphs. The list is on the
+   thread, not on the screen, so a record given two sources on the deck arrives
+   at the canvas already reading them.
+   ------------------------------------------------------------------------- */
+
+/** Everything that can be attached, minus the conversation doing the asking. */
+app.get('/api/source-catalog', (req, res) => {
+  const exclude = req.query.thread ? Number(req.query.thread) : null;
+  res.json(db.sourceCatalog({ excludeThreadId: Number.isFinite(exclude) ? exclude : null }));
+});
+
+/**
+ * What this conversation reads besides its own book, and what that costs.
+ *
+ * The size is assembled, not stored: a source grows when someone answers in it,
+ * and a number filed at the moment of attaching would be wrong by the next turn.
+ */
+app.get('/api/threads/:id/sources', (req, res) => {
+  const id = Number(req.params.id);
+  if (!db.getThread(id)) return res.status(404).json({ error: 'No such thread.' });
+
+  const items = db.listThreadSources(id);
+  const assembled = attachedThreadSource(id);
+  res.json({
+    items,
+    summary: assembled ? sourceSummary(assembled) : { chars: 0, filename: null, parts: [] },
+    preview: assembled ? assembled.text.slice(0, 4000) : '',
+  });
+});
+
+/** Save the whole list at once — it is a set of ticks, so it replaces. */
+app.put('/api/threads/:id/sources', (req, res) => {
+  const id = Number(req.params.id);
+  if (!db.getThread(id)) return res.status(404).json({ error: 'No such thread.' });
+  if (!Array.isArray(req.body?.items)) {
+    return res.status(400).json({ error: 'items must be an array.' });
+  }
+  res.json({ items: db.setThreadSources(id, req.body.items) });
 });
 
 /* -------------------------------------------------------------- ground truth */
@@ -897,7 +943,13 @@ app.post('/api/threads/:id/messages', asyncRoute(async (req, res) => {
     db.renameThread(threadId, question.slice(0, 60));
   }
 
-  await streamTurn(res, { threadId, userMsg, history, taskId, chosenModel, version });
+  // A conversation with nothing attached is answered from its own book, which
+  // `streamTurn` fetches for itself. Attach anything — another conversation, a
+  // whole graph — and the context is assembled here instead, book first.
+  await streamTurn(res, {
+    threadId, userMsg, history, taskId, chosenModel, version,
+    source: attachedThreadSource(threadId, { version }),
+  });
 }));
 
 /**
@@ -944,6 +996,7 @@ app.post('/api/threads/:id/messages/:messageId/retry', asyncRoute(async (req, re
     history: messages.slice(0, userIdx).map((m) => ({ role: m.role, content: m.content })),
     taskId: userMsg.task || 'chat',
     chosenModel,
+    source: attachedThreadSource(threadId),
   });
 }));
 
@@ -983,6 +1036,7 @@ app.post('/api/threads/:id/messages/:messageId/edit', asyncRoute(async (req, res
     history: messages.slice(0, idx).map((m) => ({ role: m.role, content: m.content })),
     taskId: userMsg.task || 'chat',
     chosenModel,
+    source: attachedThreadSource(threadId),
   });
 }));
 

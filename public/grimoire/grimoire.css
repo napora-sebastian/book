@@ -23,6 +23,7 @@
   --amber:     #ffb454;
   --amberGlow: rgba(255, 180, 84, .28);
   --alert:     #ff6b5a;
+  --go:        #6ee7a8;
 
   --fg:      #d7f2fb;
   --fgSoft:  #8fb6c6;
@@ -942,6 +943,29 @@ body.oracleOpen .snacks { left: calc(50% - 190px); }
   padding: var(--s3) var(--s4);
   border-top: 1px solid var(--edgeSoft);
 }
+/* ------------------------------------------------------- commit and quit
+
+   Everything on this console is cyan, which is fine until two buttons sit side
+   by side and one of them writes. SAVE and CANCEL, CONFIRM and ✕ — the pair a
+   user must never press for each other were the pair hardest to tell apart at a
+   glance. Green writes, red walks away, and both say so before the pointer is
+   anywhere near them. A destructive confirm keeps the filled red below: leaving
+   an edit and deleting a document are not the same red. */
+.hudBtn.go, .winAct.go {
+  color: #eafff4; background: rgba(110, 231, 168, .20); border-color: var(--go);
+}
+.hudBtn.go:hover, .winAct.go:hover {
+  background: rgba(110, 231, 168, .34); border-color: var(--go); color: #f4fffa;
+  box-shadow: 0 0 16px rgba(110, 231, 168, .30);
+}
+.hudBtn.quit, .ghostBtn.quit, .winAct.quit {
+  color: var(--alert); background: rgba(255, 107, 90, .10); border-color: rgba(255, 107, 90, .38);
+}
+.hudBtn.quit:hover, .ghostBtn.quit:hover, .winAct.quit:hover {
+  background: rgba(255, 107, 90, .22); border-color: var(--alert); color: #ffd9d3;
+  box-shadow: 0 0 14px rgba(255, 107, 90, .26);
+}
+
 /* A destructive confirm is the one button on this console that is not cyan. */
 .hudBtn.danger {
   color: #fff; background: rgba(255, 107, 90, .28); border-color: var(--alert);
@@ -1141,3 +1165,23 @@ body.oracleOpen .snacks { left: calc(50% - 190px); }
 
 .winMeta .live, .cardMeta .live { color: var(--amber); animation: blink 1.6s ease-in-out infinite; }
 @media (prefers-reduced-motion: reduce) { .winMeta .live, .cardMeta .live { animation: none; } }
+
+/* ---------------------------------------------------------- extra sources
+
+   What a record reads besides its own book. The tick list is a pick row with a
+   name of its own and, for a record, how much of it travels — and the composer
+   button carries the count, because a record answering from three other
+   conversations must say so where the question is typed.
+   ------------------------------------------------------------------------ */
+
+.hudBtn.on { border-color: var(--amber); color: var(--amber); }
+
+.srcPickHead {
+  margin: var(--s3) 0 0;
+  font: 9px var(--mono); letter-spacing: .18em; color: var(--dim); text-transform: uppercase;
+}
+.srcPickName {
+  grid-column: 2 / 3;
+  font-size: 12.5px; color: var(--fg); overflow-wrap: anywhere;
+}
+.srcModeSel { grid-column: 3 / 4; grid-row: 1 / 2; }

@@ -25,6 +25,7 @@ const el = {
   modeToggle: $('modeToggle'),
   oracle: $('oracle'), oracleLog: $('oracleLog'), oracleStage: $('oracleStage'),
   oracleForm: $('oracleForm'), oracleInput: $('oracleInput'), oracleSend: $('oracleSend'),
+  oraclePins: $('oraclePins'),
   oracleStop: $('oracleStop'), oracleModel: $('oracleModel'),
   oracleToggle: $('oracleToggle'), collapseOracle: $('collapseOracle'), showOracle: $('showOracle'),
   traffic: $('traffic'),
@@ -285,7 +286,7 @@ function editTurnHtml(editing) {
       <textarea class="editInput">${esc(editing.text)}</textarea>
       <span class="turnActs">
         <button class="winAct" data-act="editRun" data-msg="${editing.msgId}">↻ ASK AGAIN</button>
-        <button class="winAct" data-act="editCancel">✕ CANCEL</button>
+        <button class="winAct quit" data-act="editCancel">✕ CANCEL</button>
       </span>
     </article>`;
 }
@@ -405,6 +406,8 @@ function makeWindow(rec) {
       <textarea class="composerInput" rows="1" placeholder="SAY SOMETHING TO THIS RECORD…  [ENTER]"></textarea>
       <select class="composerModel hudSelect" title="The model that answers in this record"></select>
       <span class="composerStage"></span>
+      <button class="hudBtn composerSources" data-act="sources"
+              title="Read other conversations and whole graphs alongside this record">⁂ SOURCES</button>
       <button class="hudBtn primary" data-act="send">SEND</button>
       <button class="ghostBtn hidden" data-act="halt">HALT</button>
     </footer>`;
@@ -486,6 +489,14 @@ async function fitComposer(win, id, rec) {
     input.style.height = 'auto';
     if (v.draft) input.style.height = `${Math.min(input.scrollHeight, 120)}px`;
   }
+
+  // What this record reads besides its own book. The count is on the button
+  // because a record answering from three other conversations and not saying so
+  // is the one way this feature could lie.
+  const nSrc = rec?.thread?.source_count ?? 0;
+  const srcBtn = foot.querySelector('.composerSources');
+  srcBtn.textContent = nSrc ? `⁂ SOURCES · ${nSrc}` : '⁂ SOURCES';
+  srcBtn.classList.toggle('on', nSrc > 0);
 
   // SEND or HALT is not a property of the console but of this record: one can
   // be answering while the next one is waiting for a question.
@@ -617,8 +628,8 @@ async function documentHtml(id, rec) {
   if (edit) {
     return `
       <div class="tools">
-        <button class="winAct" data-act="docEditSave">✓ SAVE AS V${v + 1}</button>
-        <button class="winAct" data-act="docEditCancel">✕ CANCEL</button>
+        <button class="winAct go" data-act="docEditSave">✓ SAVE AS V${v + 1}</button>
+        <button class="winAct quit" data-act="docEditCancel">✕ CANCEL</button>
         <span class="toolsMeta">EDITING ${esc(String(doc.filename).toUpperCase())}${
           edit.text === edit.from ? '' : ' · UNSAVED'}</span>
       </div>
@@ -1037,6 +1048,7 @@ el.deck.addEventListener('click', (e) => {
 
   const rec = recordCache.get(id);
   if (act === 'ask') askAbout(id);
+  if (act === 'sources') openSourcePicker(id);
   if (act === 'send') sendFromComposer(id, win);
   if (act === 'halt') sessions.get(id)?.ac.abort();
 
@@ -1350,6 +1362,8 @@ el.oracleLog.addEventListener('click', (e) => {
   }
 });
 
+el.oraclePins.addEventListener('click', openOraclePins);
+
 el.oracleInput.addEventListener('input', () => {
   el.oracleInput.style.height = 'auto';
   el.oracleInput.style.height = `${Math.min(el.oracleInput.scrollHeight, 130)}px`;
@@ -1414,6 +1428,9 @@ el.oracleForm.addEventListener('submit', async (e) => {
           total: order.length,
           records: order.map((id) => ({ id, title: byId.get(id)?.title ?? '' })),
         },
+        // Records and graphs the user pinned: given to the planner and the
+        // answerer, not left to whatever the search happens to match.
+        sources: oraclePins,
       }),
       signal: controller.signal,
     });
@@ -1620,7 +1637,10 @@ function openModal({ title, what = '', label = null, value = '', confirmWord = n
   el.modalInput.placeholder = confirmWord ?? '';
 
   el.modalOk.textContent = ok;
+  // Green when the confirm writes something, filled red when it destroys — and
+  // never both, or the one button says two things at once.
   el.modalOk.classList.toggle('danger', danger);
+  el.modalOk.classList.toggle('go', !danger);
   el.modalOk.disabled = Boolean(confirmWord);
   el.modal.classList.remove('hidden');
   if (wantsInput) { el.modalInput.focus(); el.modalInput.select(); }
@@ -1746,8 +1766,11 @@ el.replaceFile.addEventListener('change', async () => {
     versionCache.delete(docId);
     await refreshArchive({ keep: threadId, drop: threadId });
 
-    if (out.unchanged) {
-      toast('That file is byte-for-byte what is already stored — nothing filed.', 'info');
+    if (out.identical) {
+      // The file was taken — the slot holds the new bytes now — but the text it
+      // extracted to is the text that was already there, so there is no diff to
+      // send anyone to.
+      toast(`Filed as v${out.version} — the text is identical to v${out.version - 1}`, 'info');
       return;
     }
     // The outgoing content is not lost: it stays as its own version, which is
@@ -2030,18 +2053,15 @@ async function commitDocEdit(id, doc) {
     return toast('An empty document is a deletion — use REMOVE for that', 'err');
   }
   // Not compared against the seed here: reverting to an older version leaves
-  // the textarea untouched and is still a change to the live document. The
-  // server owns that judgement and reports it back as `unchanged`.
+  // the textarea untouched and is still a change to the live document, and
+  // every save files a version regardless — the server reports back whether the
+  // text moved, and that only changes what the snackbar says.
   try {
     const saved = await api(`/api/documents/${doc.id}/text`, {
       method: 'PUT', headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ text: edit.text }),
     });
     v.docEdit = null;
-    if (saved.unchanged) {
-      await openFront(id);
-      return toast('Nothing changed — the text is identical', 'info');
-    }
     // Every record bound to this document now shows a stale length and a stale
     // version count, so the archive is re-read rather than this one window patched.
     docCache.delete(doc.id);
@@ -2049,7 +2069,9 @@ async function commitDocEdit(id, doc) {
     recordCache.delete(id);
     await refreshArchive({ keep: id, drop: id });
     await openFront(id);
-    toast(`Saved as v${saved.version} · +${saved.additions} −${saved.deletions}`);
+    toast(saved.identical
+      ? `Saved as v${saved.version} — the text is identical to v${saved.version - 1}`
+      : `Saved as v${saved.version} · +${saved.additions} −${saved.deletions}`);
   } catch (err) { toast(`Save failed — ${err.message}`, 'err'); }
 }
 
@@ -2468,6 +2490,177 @@ async function openSaved() {
   } catch (err) {
     openSheet({ title: '★ SAVED RESPONSES', body: `<div class="notice bad">${esc(err.message)}</div>` });
   }
+}
+
+/* ------------------------------------------------------------ extra sources
+
+   A record has always read its own book. This is where it is handed more to
+   read: other records, and whole graphs, ticked from one list. The list belongs
+   to the record — attach a source here and the same record on the canvas reads
+   it too — and it is assembled when the question is sent, so an answer added to
+   a source afterwards is read by the very next turn.
+   ------------------------------------------------------------------------ */
+
+/** One tick list, used for a record's own sources and for the Oracle's pins. */
+function sourceRows(catalog, on) {
+  const rank = (kind, x) => (on.has(`${kind}:${x.id}`) ? on.get(`${kind}:${x.id}`).position : Infinity);
+
+  const threadRows = [...catalog.threads]
+    .sort((a, b) => rank('thread', a) - rank('thread', b))
+    .map((t) => {
+      const cur = on.get(`thread:${t.id}`);
+      return `
+        <label class="pickRow srcPick${cur ? ' on' : ''}">
+          <input type="checkbox" class="pickBox srcBox" data-kind="thread" data-id="${t.id}"${cur ? ' checked' : ''} />
+          <span class="srcPickName">◈ REC ${pad(t.id)} · ${esc(t.title)}</span>
+          <select class="hudSelect srcModeSel" data-id="${t.id}" title="How much of that record is read">
+            <option value="full"${cur?.mode === 'last' ? '' : ' selected'}>WHOLE</option>
+            <option value="last"${cur?.mode === 'last' ? ' selected' : ''}>LAST ANSWER</option>
+          </select>
+          <span class="pickMeta">${t.messages} MSG${t.filename ? ` · ◆ ${esc(t.filename)}` : ''} · ${
+            fmtWhen(t.updated_at)}${t.messages ? '' : ' · EMPTY, CARRIES NOTHING'}</span>
+        </label>`;
+    }).join('');
+
+  const graphRows = [...catalog.graphs]
+    .sort((a, b) => rank('graph', a) - rank('graph', b))
+    .map((g) => {
+      const cur = on.get(`graph:${g.id}`);
+      return `
+        <label class="pickRow srcPick${cur ? ' on' : ''}">
+          <input type="checkbox" class="pickBox srcBox" data-kind="graph" data-id="${g.id}"${cur ? ' checked' : ''} />
+          <span class="srcPickName">⁂ ${esc(g.title)}</span>
+          <span class="pickMeta">${g.points} POINT${g.points === 1 ? '' : 'S'} · ${g.lines} LINE${
+            g.lines === 1 ? '' : 'S'} · ${g.books} BOOK${g.books === 1 ? '' : 'S'} · ${fmtWhen(g.updated_at)}${
+            g.points ? '' : ' · EMPTY, CARRIES NOTHING'}</span>
+        </label>`;
+    }).join('');
+
+  return `
+    <h3 class="srcPickHead">RECORDS</h3>
+    ${threadRows || '<div class="notice">NO RECORDS YET.</div>'}
+    <h3 class="srcPickHead">GRAPHS</h3>
+    ${graphRows || '<div class="notice">NO GRAPHS YET — BUILD ONE IN ⁂ CONSTELLATION.</div>'}`;
+}
+
+/** What is ticked in the open sheet, in the order the list shows it. */
+function tickedSources() {
+  return [...el.sheetBody.querySelectorAll('.srcBox:checked')].map((b) => ({
+    kind: b.dataset.kind,
+    id: Number(b.dataset.id),
+    mode: b.dataset.kind === 'thread'
+      ? (el.sheetBody.querySelector(`.srcModeSel[data-id="${b.dataset.id}"]`)?.value ?? 'full')
+      : 'full',
+  }));
+}
+
+/** Inside a <label>, a click on the mode picker would toggle the tick as well. */
+function wireSourceRows() {
+  el.sheetBody.querySelectorAll('.srcModeSel').forEach((sel) =>
+    sel.addEventListener('click', (e) => e.preventDefault()));
+  el.sheetBody.querySelectorAll('.srcBox').forEach((box) =>
+    box.addEventListener('change', () => box.closest('.pickRow').classList.toggle('on', box.checked)));
+}
+
+async function openSourcePicker(id) {
+  openSheet({ title: '⁂ EXTRA SOURCES', body: '<p class="loadingRec">READING</p>' });
+
+  let catalog;
+  let mine;
+  try {
+    [catalog, mine] = await Promise.all([
+      api(`/api/source-catalog?thread=${id}`),
+      api(`/api/threads/${id}/sources`),
+    ]);
+  } catch (err) {
+    return openSheet({ title: '⁂ EXTRA SOURCES', body: `<div class="notice bad">${esc(err.message)}</div>` });
+  }
+
+  const on = new Map(mine.items.map((i) => [`${i.kind}:${i.ref_id}`, i]));
+
+  openSheet({
+    title: `⁂ EXTRA SOURCES · REC ${pad(id)}`,
+    body: `
+      <p class="modalWhat">Tick what this record should read beside its own book. A record is read
+         as its transcript, a graph as all of its points and the lines between them. Nothing is
+         copied — every question re-reads them as they stand at that moment.</p>
+      ${mine.summary.chars
+        ? `<div class="notice">NOW CARRYING ${mine.summary.chars.toLocaleString()} CHARS INTO EVERY QUESTION IN THIS RECORD.</div>`
+        : ''}
+      ${sourceRows(catalog, on)}`,
+    acts: [{
+      label: 'SAVE SOURCES',
+      primary: true,
+      onClick: async () => {
+        try {
+          const saved = await api(`/api/threads/${id}/sources`, {
+            method: 'PUT', headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ items: tickedSources() }),
+          });
+          const rec = recordCache.get(id);
+          if (rec?.thread) rec.thread.source_count = saved.items.length;
+          closeSheet();
+          openFront(id);
+          toast(saved.items.length
+            ? `REC ${pad(id)} now reads ${saved.items.length} extra source${saved.items.length === 1 ? '' : 's'}`
+            : `REC ${pad(id)} reads only its own book again`);
+        } catch (err) { toast(err.message, 'err'); }
+      },
+    }],
+  });
+
+  wireSourceRows();
+}
+
+/**
+ * What the Oracle must read, whatever its search decides.
+ *
+ * The Oracle already reaches every conversation by searching for it — but only
+ * by searching, and never a graph, which is a shape over conversations and not
+ * text to match. Pinning says "this one, given, from the first round".
+ */
+let oraclePins = [];
+
+async function openOraclePins() {
+  openSheet({ title: '⁂ PINNED SOURCES', body: '<p class="loadingRec">READING</p>' });
+
+  let catalog;
+  try {
+    catalog = await api('/api/source-catalog');
+  } catch (err) {
+    return openSheet({ title: '⁂ PINNED SOURCES', body: `<div class="notice bad">${esc(err.message)}</div>` });
+  }
+
+  const on = new Map(oraclePins.map((p, i) => [`${p.kind}:${p.id}`, { ...p, position: i }]));
+
+  openSheet({
+    title: `⁂ PINNED SOURCES · ${oraclePins.length}`,
+    body: `
+      <p class="modalWhat">The Oracle searches the archive for itself. Anything ticked here is given
+         to it instead — in front of it from the first round, whether or not a search would have
+         found it. A graph can only reach it this way: search matches transcripts, and a graph is
+         the shape over them.</p>
+      ${sourceRows(catalog, on)}`,
+    acts: [{
+      label: 'PIN THESE',
+      primary: true,
+      onClick: () => {
+        oraclePins = tickedSources();
+        showOraclePins();
+        closeSheet();
+        toast(oraclePins.length
+          ? `${oraclePins.length} source${oraclePins.length === 1 ? '' : 's'} pinned to every question you ask the Oracle`
+          : 'Pins cleared — the Oracle searches on its own again');
+      },
+    }],
+  });
+
+  wireSourceRows();
+}
+
+function showOraclePins() {
+  el.oraclePins.textContent = oraclePins.length ? `⁂ PINNED · ${oraclePins.length}` : '⁂ PIN SOURCES';
+  el.oraclePins.classList.toggle('on', oraclePins.length > 0);
 }
 
 el.sheetBody.addEventListener('click', async (e) => {

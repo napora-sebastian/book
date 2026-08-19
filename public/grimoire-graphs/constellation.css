@@ -24,6 +24,7 @@
   --amber:     #ffb454;
   --amberGlow: rgba(255, 180, 84, .28);
   --alert:     #ff6b5a;
+  --go:        #6ee7a8;
 
   --fg:      #d7f2fb;
   --fgSoft:  #8fb6c6;
@@ -369,6 +370,11 @@
   padding: var(--s3); border-bottom: 1px solid var(--edgeSoft);
 }
 .constel .inspGlyph { font-size: 15px; color: var(--cyan); }
+/* The header's buttons never squeeze the title out of shape, and never squeeze
+   each other: the identity takes the slack, they take what they need. */
+.constel .inspTop .hudBtn, .constel .inspTop .ghostBtn { flex: none; }
+.constel .inspTop [data-el="inspUsage"] { padding: 0 8px; color: var(--amber); border-color: rgba(255, 180, 84, .35); }
+.constel .inspTop [data-el="inspUsage"]:hover { background: rgba(255, 180, 84, .18); color: #fff2dd; box-shadow: none; }
 .constel .inspIdent { flex: 1; min-width: 0; }
 .constel .inspIdent h2 {
   margin: 0; font-family: var(--mono); font-size: 12px; letter-spacing: .1em;
@@ -589,6 +595,72 @@
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 .constel .pickMeta { font-family: var(--mono); font-size: 9px; letter-spacing: .1em; color: var(--dim); margin-top: 2px; }
+/* "this is already standing somewhere" — amber, because it is the one part of
+   the row that changes what pressing it means. */
+.constel .pickOn { color: var(--amber); }
+
+/* ------------------------------------------------------------- the atlas
+
+   A named list, not a second canvas: rows of text that say what each graph
+   stands on and what it shares. Anything drawn here would be a worse drawing of
+   the thing already on the other side of this sheet. */
+.constel .atlasTotals {
+  display: flex; flex-wrap: wrap; gap: var(--s3);
+  font-family: var(--mono); font-size: 9.5px; letter-spacing: .12em; color: var(--dim);
+  padding-bottom: var(--s3); border-bottom: 1px solid var(--edgeSoft);
+}
+.constel .atlasTotals b { color: var(--cyan); font-size: 12px; }
+.constel .atlasTotals .hot b { color: var(--amber); }
+
+.constel .atlasHead {
+  font-family: var(--mono); font-size: 9.5px; letter-spacing: .18em; font-weight: 400;
+  color: var(--fgSoft); margin: var(--s4) 0 var(--s2);
+}
+
+.constel .atlasItem {
+  display: flex; align-items: flex-start; gap: var(--s3);
+  padding: var(--s2) var(--s3); margin-bottom: 6px;
+  background: rgba(2, 14, 22, .3);
+  border: 1px solid var(--edgeSoft); border-left: 2px solid var(--amber);
+}
+.constel .atlasItem .pickGlyph { margin-top: 2px; }
+.constel .atlasOn { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 5px; }
+
+.constel .atlasChip {
+  font-family: var(--mono); font-size: 9px; letter-spacing: .1em; text-transform: uppercase;
+  color: var(--cyan); background: rgba(111, 230, 255, .10);
+  border: 1px solid var(--edgeSoft); padding: 2px 7px; cursor: pointer;
+  max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.constel .atlasChip:hover { background: rgba(111, 230, 255, .22); border-color: var(--cyan); }
+.constel .atlasChip.here { color: var(--amber); border-color: rgba(255, 180, 84, .4); }
+
+.constel .atlasGraph {
+  padding: var(--s3); margin-bottom: 6px;
+  background: rgba(2, 14, 22, .3);
+  border: 1px solid var(--edgeSoft); border-left: 2px solid transparent;
+}
+.constel .atlasGraph.current { border-left-color: var(--cyan); background: rgba(111, 230, 255, .07); }
+.constel .atlasTop { display: flex; align-items: baseline; gap: var(--s3); flex-wrap: wrap; }
+.constel .atlasName {
+  font-family: var(--mono); font-size: 11.5px; color: var(--fg);
+  background: none; border: none; padding: 0; cursor: pointer; text-align: left;
+}
+.constel .atlasName:hover { color: var(--cyan); text-shadow: 0 0 12px var(--cyanGlow); }
+
+.constel .atlasHolds { display: flex; flex-wrap: wrap; gap: 4px; margin-top: var(--s2); }
+.constel .atlasHold {
+  font-family: var(--mono); font-size: 9px; letter-spacing: .06em;
+  color: var(--fgSoft); background: rgba(111, 230, 255, .06);
+  border: 1px solid var(--edgeSoft); padding: 2px 6px;
+}
+.constel .atlasHold.doc { color: var(--amber); border-color: rgba(255, 180, 84, .22); }
+
+.constel .atlasShare {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 4px; margin-top: var(--s2);
+  font-family: var(--mono); font-size: 9px; letter-spacing: .12em; color: var(--dim);
+}
+.constel .atlasShare.alone { color: var(--dim); opacity: .7; letter-spacing: .1em; }
 
 .constel .srcPreview {
   font-family: var(--mono); font-size: 10.5px; line-height: 1.6; color: var(--fgSoft);
@@ -610,4 +682,56 @@
 
 /* A source point has no composer, so its own actions sit under the note that
    explains what it is. */
-.constel .docActs { display: flex; gap: var(--s2); padding: var(--s3) 0; }
+.constel .docActs { display: flex; flex-wrap: wrap; gap: var(--s2); padding: var(--s3) 0; }
+
+/* A point standing on other canvases too. Amber, like every other mark on this
+   view that means "this is not only yours". */
+.constel .nodeAct.shared { color: var(--amber); border-color: rgba(255, 180, 84, .3); }
+.constel .nodeAct.shared:hover { background: rgba(255, 180, 84, .18); border-color: var(--amber); }
+
+/* ------------------------------------------------------- commit and quit
+
+   The canvas is one colour, and that is the point of it — except where two
+   buttons sit together and one of them writes. SAVE against CANCEL, CONFIRM
+   against ✕: green commits, red leaves, and neither has to be read to be told
+   apart. A destructive confirm stays the filled red of .danger — walking away
+   from an edit and deleting a graph are not the same red. */
+.constel .hudBtn.go, .constel .turnAct.go {
+  color: #eafff4; background: rgba(110, 231, 168, .20); border-color: var(--go);
+}
+.constel .hudBtn.go:hover, .constel .turnAct.go:hover {
+  background: rgba(110, 231, 168, .34); border-color: var(--go); color: #f4fffa;
+  box-shadow: 0 0 16px rgba(110, 231, 168, .30);
+}
+.constel .hudBtn.quit, .constel .ghostBtn.quit, .constel .turnAct.quit, .constel .back.quit {
+  color: var(--alert); background: rgba(255, 107, 90, .10); border-color: rgba(255, 107, 90, .38);
+}
+.constel .hudBtn.quit:hover, .constel .ghostBtn.quit:hover, .constel .turnAct.quit:hover, .constel .back.quit:hover {
+  background: rgba(255, 107, 90, .22); border-color: var(--alert); color: #ffd9d3;
+  box-shadow: 0 0 14px rgba(255, 107, 90, .26);
+}
+
+/* ------------------------------------------------------- extra sources
+
+   Sources a point reads without a line: another conversation, or a whole
+   graph, ticked from a list. In the READS panel they sit under the drawn
+   ones, marked with a + rather than a ↳ — nothing on this canvas points at
+   them, so there is no line to follow and none to cut.
+   -------------------------------------------------------------------- */
+
+.constel .srcRow.attached { border-top-style: solid; }
+.constel .srcRow.attached .srcName { color: var(--fg); }
+.constel .srcRow.graph .srcGlyph { color: var(--amber); }
+
+.constel .srcPick { align-items: center; }
+.constel .pickBox { accent-color: var(--cyan); flex: none; }
+.constel .srcPick.on { border-left-color: var(--amber); background: rgba(255, 180, 84, .08); }
+.constel .srcModeSel { flex: none; }
+.constel .srcPickHead {
+  margin: var(--s3) 0 var(--s2);
+  font-family: var(--mono); font-size: 9px; letter-spacing: .18em;
+  color: var(--dim); text-transform: uppercase;
+}
+.constel .nodeMeta.attached { color: var(--amber); }
+.constel .srcRow.idle .srcName { color: var(--dim); }
+.constel .srcRow.idle .srcSize { color: var(--dim); font-style: italic; }

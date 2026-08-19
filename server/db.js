@@ -227,18 +227,25 @@ export function getDocumentFile(id) {
  *
  * The outgoing content is not lost: it stays as its own version row, and the
  * incoming content is appended as the next one, so the change is reviewable as
- * a diff afterwards. Re-uploading a byte-identical file is reported as
- * `unchanged` rather than recorded as a version that changed nothing.
+ * a diff afterwards.
+ *
+ * Every replace files a version, including one whose extracted text matches
+ * what is already stored. Two reasons. A file is more than its text: swapping a
+ * scanned PDF for the DOCX it was typed from changes the kind, the bytes and
+ * the page count, and skipping the write left the old file in the slot while
+ * telling the user it had been replaced. And the rail is a record of what was
+ * done to the document, not only of what came out different — a save that filed
+ * nothing was indistinguishable from a save that failed. `identical` says the
+ * text did not move, and +0 −0 says the same on the rail.
  */
 export function replaceDocumentContent(id, { kind, text, words, pages, bytes, data }) {
   const current = getDocument(id);
   if (!current) return null;
 
   const sha256 = crypto.createHash('sha256').update(text).digest('hex');
-  if (sha256 === current.sha256) {
-    return { doc: current, version: latestVersionNumber(id), unchanged: true };
-  }
+  const identical = sha256 === current.sha256;
 
+  let stat;
   const version = inTransaction(() => {
     // Documents stored before versioning existed have no rows at all; their
     // current content becomes version 1 so the diff has a left-hand side.
@@ -250,17 +257,17 @@ export function replaceDocumentContent(id, { kind, text, words, pages, bytes, da
     ).run(kind ?? null, text, text.length, words ?? null, pages ?? null, bytes ?? null, sha256, data ?? null, id);
 
     const next = latestVersionNumber(id) + 1;
-    const { additions, deletions } = diffStat(current.text, text);
+    stat = diffStat(current.text, text);
     insertVersion(
       id,
       next,
       { filename: current.filename, kind, text, words, pages, bytes, sha256 },
-      { additions, deletions },
+      stat,
     );
     return next;
   });
 
-  return { doc: getDocument(id), version, unchanged: false };
+  return { doc: getDocument(id), version, identical, additions: stat.additions, deletions: stat.deletions };
 }
 
 function insertVersion(documentId, version, v, stat) {
@@ -296,16 +303,17 @@ function ensureInitialVersion(id, doc) {
  * throw away the only copy of what arrived. `documents.text` is what the models
  * read and what the versions record; `documents.data` stays what was uploaded.
  *
- * Returns `unchanged` rather than filing a version that changed nothing.
+ * Like a replace, every save files a version — a save that resolved to the
+ * same text still says when the document was last gone over and found right,
+ * and that is worth a row at +0 −0. `identical` reports it so the caller can
+ * say so instead of claiming a change nobody made.
  */
 export function editDocumentText(id, { text }) {
   const current = getDocument(id);
   if (!current) return null;
 
   const sha256 = crypto.createHash('sha256').update(text).digest('hex');
-  if (sha256 === current.sha256) {
-    return { doc: current, version: latestVersionNumber(id), unchanged: true, additions: 0, deletions: 0 };
-  }
+  const identical = sha256 === current.sha256;
 
   let stat;
   const version = inTransaction(() => {
@@ -329,7 +337,7 @@ export function editDocumentText(id, { text }) {
     return next;
   });
 
-  return { doc: getDocument(id), version, unchanged: false, additions: stat.additions, deletions: stat.deletions };
+  return { doc: getDocument(id), version, identical, additions: stat.additions, deletions: stat.deletions };
 }
 
 /**
@@ -466,7 +474,8 @@ export function listThreads(limit = 200) {
               (SELECT COUNT(*) FROM messages m WHERE m.thread_id = t.id) AS message_count,
               (SELECT m.content FROM messages m
                 WHERE m.thread_id = t.id AND m.role = 'user'
-                ORDER BY m.id DESC LIMIT 1) AS last_user
+                ORDER BY m.id DESC LIMIT 1) AS last_user,
+              (SELECT COUNT(*) FROM thread_sources s WHERE s.thread_id = t.id) AS source_count
          FROM threads t
          LEFT JOIN documents d ON d.id = t.document_id
         ORDER BY t.updated_at DESC, t.id DESC
@@ -480,7 +489,8 @@ export function getThread(id) {
     db
       .prepare(
         `SELECT t.*, d.filename, d.kind AS doc_kind, d.chars AS doc_chars,
-                d.pages AS doc_pages, d.words AS doc_words
+                d.pages AS doc_pages, d.words AS doc_words,
+                (SELECT COUNT(*) FROM thread_sources s WHERE s.thread_id = t.id) AS source_count
            FROM threads t
            LEFT JOIN documents d ON d.id = t.document_id
           WHERE t.id = ?`,
@@ -834,6 +844,9 @@ db.exec(`
 
   CREATE INDEX IF NOT EXISTS idx_graph_nodes_graph ON graph_nodes(graph_id);
   CREATE INDEX IF NOT EXISTS idx_graph_nodes_thread ON graph_nodes(thread_id);
+  -- Asked once per row by the library and once per node by the canvas: "where
+  -- else does this book stand?". Without this it is a table scan each time.
+  CREATE INDEX IF NOT EXISTS idx_graph_nodes_document ON graph_nodes(document_id);
   CREATE INDEX IF NOT EXISTS idx_graph_edges_graph ON graph_edges(graph_id);
   CREATE INDEX IF NOT EXISTS idx_graph_edges_target ON graph_edges(target_id);
   CREATE INDEX IF NOT EXISTS idx_graph_edges_source ON graph_edges(source_id);
@@ -896,6 +909,10 @@ export function listGraphNodes(graphId) {
               (SELECT group_concat(dv.version) FROM document_versions dv
                 WHERE dv.document_id = d.id)               AS doc_versions,
               t.title          AS thread_title,
+              -- Sources this conversation reads that are not on any canvas:
+              -- attached by hand, so nothing on the graph shows them but the
+              -- turn is still answered from them.
+              (SELECT COUNT(*) FROM thread_sources s WHERE s.thread_id = t.id) AS source_count,
               t.model          AS thread_model,
               t.document_id    AS thread_document_id,
               t.updated_at     AS thread_updated_at,
@@ -905,7 +922,16 @@ export function listGraphNodes(graphId) {
                 ORDER BY m.id DESC LIMIT 1)                AS last_user,
               (SELECT m.content FROM messages m
                 WHERE m.thread_id = t.id AND m.role = 'assistant'
-                ORDER BY m.id DESC LIMIT 1)                AS last_answer
+                ORDER BY m.id DESC LIMIT 1)                AS last_answer,
+              -- How many OTHER graphs carry this same book or conversation.
+              -- Nothing on a canvas is a copy, so the same subject standing on
+              -- three canvases is three views of one thing — and a card that
+              -- does not say so invites editing it as though it were private.
+              (SELECT COUNT(DISTINCT n2.graph_id) FROM graph_nodes n2
+                WHERE n2.graph_id <> n.graph_id
+                  AND ((n.document_id IS NOT NULL AND n2.document_id = n.document_id)
+                    OR (n.thread_id   IS NOT NULL AND n2.thread_id   = n.thread_id)))
+                                                           AS other_graphs
          FROM graph_nodes n
          LEFT JOIN documents d ON d.id = n.document_id
          LEFT JOIN threads   t ON t.id = n.thread_id
@@ -1046,6 +1072,169 @@ export function ancestorIds(nodeId) {
   return out;
 }
 
+/* ------------------------------------------------------- across the graphs
+
+   A point is a pointer, so the same book or the same conversation can stand on
+   as many canvases as there is use for it — the schema has always allowed it,
+   and nothing warned you it had happened. These two read the shelf sideways:
+   not "what is on this graph" but "what does this graph share with the others",
+   which is the question you cannot answer while standing inside one of them.
+   =========================================================================== */
+
+/** Every graph carrying this book or this conversation, newest work first. */
+export function graphsUsing({ documentId = null, threadId = null }) {
+  if (documentId == null && threadId == null) return [];
+  const column = documentId != null ? 'document_id' : 'thread_id';
+  return db
+    .prepare(
+      `SELECT g.id, g.title, g.updated_at,
+              COUNT(n.id)   AS points,
+              MIN(n.id)     AS node_id
+         FROM graph_nodes n
+         JOIN graphs g ON g.id = n.graph_id
+        WHERE n.${column} = ?
+        GROUP BY g.id
+        ORDER BY g.updated_at DESC, g.id DESC`,
+    )
+    .all(documentId ?? threadId);
+}
+
+/**
+ * The whole shelf in one read: every graph, what each one stands on, and what
+ * any two of them hold in common.
+ *
+ * Two queries, not one per graph. The joins are the same ones `listGraphNodes`
+ * does, minus the previews — an atlas names things, it does not draw their
+ * contents — and the shape below is assembled here rather than in the client so
+ * that "shared" means the same thing everywhere it is shown.
+ */
+export function graphAtlas() {
+  const graphRows = db
+    .prepare(
+      `SELECT g.id, g.title, g.created_at, g.updated_at,
+              (SELECT COUNT(*) FROM graph_nodes n WHERE n.graph_id = g.id) AS node_count,
+              (SELECT COUNT(*) FROM graph_edges e WHERE e.graph_id = g.id) AS edge_count
+         FROM graphs g
+        ORDER BY g.updated_at DESC, g.id DESC`,
+    )
+    .all();
+
+  const nodeRows = db
+    .prepare(
+      `SELECT n.id, n.graph_id, n.kind, n.document_id, n.thread_id, n.doc_version,
+              d.filename   AS doc_filename,
+              d.chars      AS doc_chars,
+              (SELECT COALESCE(MAX(dv.version), 1) FROM document_versions dv
+                WHERE dv.document_id = d.id)                              AS doc_newest,
+              (SELECT COUNT(*) FROM threads th WHERE th.document_id = d.id) AS doc_threads,
+              t.title      AS thread_title,
+              t.updated_at AS thread_updated_at,
+              (SELECT COUNT(*) FROM messages m WHERE m.thread_id = t.id)  AS message_count
+         FROM graph_nodes n
+         LEFT JOIN documents d ON d.id = n.document_id
+         LEFT JOIN threads   t ON t.id = n.thread_id
+        ORDER BY n.graph_id ASC, n.id ASC`,
+    )
+    .all();
+
+  const graphs = new Map(graphRows.map((g) => [g.id, { ...g, documents: [], threads: [] }]));
+  const items = new Map();   // "document:7" → the subject, and every graph on it
+
+  for (const n of nodeRows) {
+    const g = graphs.get(n.graph_id);
+    if (!g) continue;
+
+    const isDoc = n.kind === 'document';
+    const subjectId = isDoc ? n.document_id : n.thread_id;
+    // A node whose subject was deleted out from under it: cascades normally
+    // take these, but a store edited by hand must not crash the atlas.
+    if (subjectId == null) continue;
+
+    const key = `${n.kind}:${subjectId}`;
+    let item = items.get(key);
+    if (!item) {
+      item = {
+        kind: n.kind,
+        id: subjectId,
+        name: (isDoc ? n.doc_filename : n.thread_title) ?? (isDoc ? 'missing book' : 'untitled'),
+        chars: isDoc ? n.doc_chars : null,
+        newest: isDoc ? n.doc_newest : null,
+        threads: isDoc ? n.doc_threads : null,        // records on this book, archive-wide
+        messages: isDoc ? null : n.message_count,
+        updated_at: isDoc ? null : n.thread_updated_at,
+        points: 0,
+        graphs: [],
+      };
+      items.set(key, item);
+    }
+    item.points += 1;
+    if (!item.graphs.some((x) => x.id === n.graph_id)) {
+      item.graphs.push({ id: n.graph_id, title: g.title });
+    }
+
+    const list = isDoc ? g.documents : g.threads;
+    const already = list.find((x) => x.id === subjectId);
+    if (already) {
+      already.points += 1;
+      if (isDoc && n.doc_version != null && !already.pins.includes(n.doc_version)) {
+        already.pins.push(n.doc_version);
+      }
+    } else {
+      list.push({
+        id: subjectId,
+        name: item.name,
+        points: 1,
+        ...(isDoc ? { pins: n.doc_version != null ? [n.doc_version] : [] } : { messages: n.message_count }),
+      });
+    }
+  }
+
+  // What any two graphs hold in common. Built from the item index rather than a
+  // second pass over the nodes: an item on three graphs is three relations, and
+  // counting it once per pair is what makes the list read as relations at all.
+  const shares = new Map();  // graphId → (otherGraphId → shared items)
+  for (const item of items.values()) {
+    if (item.graphs.length < 2) continue;
+    for (const a of item.graphs) {
+      for (const b of item.graphs) {
+        if (a.id === b.id) continue;
+        const mine = shares.get(a.id) ?? new Map();
+        shares.set(a.id, mine);
+        const withB = mine.get(b.id) ?? { id: b.id, title: b.title, items: [] };
+        withB.items.push({ kind: item.kind, id: item.id, name: item.name });
+        mine.set(b.id, withB);
+      }
+    }
+  }
+
+  for (const [id, g] of graphs) {
+    g.shares = [...(shares.get(id)?.values() ?? [])]
+      .sort((a, b) => b.items.length - a.items.length);
+  }
+
+  const all = [...items.values()];
+  const shared = all
+    .filter((i) => i.graphs.length > 1)
+    .sort((a, b) => b.graphs.length - a.graphs.length || b.points - a.points);
+
+  return {
+    graphs: [...graphs.values()],
+    items: all.sort((a, b) => b.graphs.length - a.graphs.length || b.points - a.points),
+    shared,
+    totals: {
+      graphs: graphRows.length,
+      nodes: nodeRows.length,
+      edges: graphRows.reduce((sum, g) => sum + g.edge_count, 0),
+      documents: all.filter((i) => i.kind === 'document').length,
+      threads: all.filter((i) => i.kind === 'thread').length,
+      shared: shared.length,
+      // Graphs standing entirely on their own — nothing they hold is anywhere
+      // else. Worth naming: it is the answer to "can I delete this one safely".
+      isolated: [...graphs.values()].filter((g) => !g.shares.length).length,
+    },
+  };
+}
+
 /** The node a thread sits on, if any — so a thread opened on a graph can find
  *  its way back to the canvas it belongs to. */
 export function graphNodeForThread(threadId) {
@@ -1115,4 +1304,155 @@ export function answerReuseLinks() {
       WHERE m.thread_id <> srt.thread_id
       GROUP BY m.thread_id, srt.thread_id`,
   ).all();
+}
+
+/* ==========================================================================
+   Extra sources — what a conversation reads besides its own book.
+
+   A thread has always had exactly one source: the document it was opened on.
+   The graph widened that, but only for conversations standing on a canvas, and
+   only along the lines drawn into them. This is the same idea without the
+   canvas: any conversation, anywhere, can be handed a list of other
+   conversations and whole graphs to read alongside its own material.
+
+   Two rules keep it honest, and they are the graph's rules again:
+
+     1. A row is a pointer. Attaching a conversation does not copy a word of
+        it — the text is rendered from the live transcript at send time, so an
+        answer added to the source after it was attached is read by the very
+        next turn.
+
+     2. It never recurses. A conversation attached as a source contributes its
+        own transcript, not the things *it* reads; a graph contributes its own
+        points. So two conversations may legally read each other, and asking
+        one of them still terminates.
+   ========================================================================= */
+
+db.exec(`
+  CREATE TABLE IF NOT EXISTS thread_sources (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    thread_id     INTEGER NOT NULL REFERENCES threads(id) ON DELETE CASCADE,
+    kind          TEXT    NOT NULL CHECK (kind IN ('thread','graph')),
+    -- Exactly one of these is set, the same shape a graph node uses.
+    ref_thread_id INTEGER REFERENCES threads(id) ON DELETE CASCADE,
+    ref_graph_id  INTEGER REFERENCES graphs(id)  ON DELETE CASCADE,
+    -- 'last' is only meaningful for a conversation: its final answer instead of
+    -- the whole transcript. A graph is always read whole.
+    mode          TEXT    NOT NULL DEFAULT 'full' CHECK (mode IN ('full','last')),
+    position      INTEGER NOT NULL DEFAULT 0,
+    created_at    TEXT    NOT NULL DEFAULT (datetime('now')),
+    CHECK ((ref_thread_id IS NULL) <> (ref_graph_id IS NULL))
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_thread_sources_thread ON thread_sources(thread_id, position);
+  CREATE UNIQUE INDEX IF NOT EXISTS idx_thread_sources_ref
+    ON thread_sources(thread_id, kind, COALESCE(ref_thread_id, ref_graph_id));
+`);
+
+/** The raw rows, in reading order. The inference path wants nothing else. */
+export function threadSourceRows(threadId) {
+  return db.prepare(
+    `SELECT * FROM thread_sources WHERE thread_id = ? ORDER BY position ASC, id ASC`,
+  ).all(threadId);
+}
+
+/**
+ * The same list with enough about each source to name it on screen: how big a
+ * conversation is, how much a graph holds. The picker and every badge read
+ * this, so what is offered and what is attached are described the same way.
+ */
+export function listThreadSources(threadId) {
+  return db.prepare(
+    `SELECT s.id, s.kind, s.mode, s.position,
+            COALESCE(s.ref_thread_id, s.ref_graph_id) AS ref_id,
+            COALESCE(t.title, g.title) AS title,
+            t.updated_at AS thread_updated, g.updated_at AS graph_updated,
+            d.filename,
+            (SELECT COUNT(*) FROM messages m WHERE m.thread_id = s.ref_thread_id) AS messages,
+            (SELECT COUNT(*) FROM graph_nodes n WHERE n.graph_id = s.ref_graph_id) AS points,
+            (SELECT COUNT(*) FROM graph_edges e WHERE e.graph_id = s.ref_graph_id) AS lines
+       FROM thread_sources s
+       LEFT JOIN threads t   ON t.id = s.ref_thread_id
+       LEFT JOIN documents d ON d.id = t.document_id
+       LEFT JOIN graphs g    ON g.id = s.ref_graph_id
+      WHERE s.thread_id = ?
+      ORDER BY s.position ASC, s.id ASC`,
+  ).all(threadId);
+}
+
+export function countThreadSources(threadId) {
+  return db.prepare('SELECT COUNT(*) AS n FROM thread_sources WHERE thread_id = ?')
+    .get(threadId).n;
+}
+
+/**
+ * Replace the whole list in one write.
+ *
+ * Replace rather than add/remove because that is what the screen does: a set of
+ * ticks, saved. It also makes the order explicit — the position a source has in
+ * the list is the order it reaches the model in.
+ *
+ * A thread cannot read itself; that row is dropped rather than refused, so
+ * ticking everything in a list that happens to include the current record still
+ * saves the rest.
+ */
+export function setThreadSources(threadId, items) {
+  const clean = [];
+  const seen = new Set();
+  for (const raw of items ?? []) {
+    const kind = raw?.kind === 'graph' ? 'graph' : 'thread';
+    const id = Number(raw?.id);
+    if (!Number.isInteger(id) || id <= 0) continue;
+    if (kind === 'thread' && id === Number(threadId)) continue;
+    const key = `${kind}:${id}`;
+    if (seen.has(key)) continue;
+
+    const exists = kind === 'thread'
+      ? db.prepare('SELECT 1 FROM threads WHERE id = ?').get(id)
+      : db.prepare('SELECT 1 FROM graphs WHERE id = ?').get(id);
+    if (!exists) continue;
+
+    seen.add(key);
+    clean.push({ kind, id, mode: raw?.mode === 'last' && kind === 'thread' ? 'last' : 'full' });
+  }
+
+  inTransaction(() => {
+    db.prepare('DELETE FROM thread_sources WHERE thread_id = ?').run(threadId);
+    const ins = db.prepare(
+      `INSERT INTO thread_sources (thread_id, kind, ref_thread_id, ref_graph_id, mode, position)
+       VALUES (?, ?, ?, ?, ?, ?)`,
+    );
+    clean.forEach((c, i) => ins.run(
+      threadId, c.kind,
+      c.kind === 'thread' ? c.id : null,
+      c.kind === 'graph' ? c.id : null,
+      c.mode, i,
+    ));
+  });
+
+  return listThreadSources(threadId);
+}
+
+/** Everything that can be attached, described the way the picker shows it. */
+export function sourceCatalog({ excludeThreadId = null } = {}) {
+  const threads = db.prepare(
+    `SELECT t.id, t.title, t.updated_at, d.filename,
+            (SELECT COUNT(*) FROM messages m WHERE m.thread_id = t.id) AS messages
+       FROM threads t
+       LEFT JOIN documents d ON d.id = t.document_id
+      WHERE (? IS NULL OR t.id <> ?)
+      ORDER BY t.updated_at DESC, t.id DESC`,
+  ).all(excludeThreadId, excludeThreadId);
+
+  const graphs = db.prepare(
+    `SELECT g.id, g.title, g.updated_at,
+            (SELECT COUNT(*) FROM graph_nodes n WHERE n.graph_id = g.id) AS points,
+            (SELECT COUNT(*) FROM graph_edges e WHERE e.graph_id = g.id) AS lines,
+            (SELECT COUNT(*) FROM graph_nodes n
+              WHERE n.graph_id = g.id AND n.document_id IS NOT NULL) AS books
+       FROM graphs g
+      ORDER BY g.updated_at DESC, g.id DESC`,
+  ).all();
+
+  return { threads, graphs };
 }

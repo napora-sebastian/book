@@ -47,10 +47,11 @@ const MARKUP = `
       <select data-el="graphSel" class="hudSelect" title="Which graph is on the canvas"></select>
       <button data-el="newGraph" class="hudBtn" title="Start a new graph">+ GRAPH</button>
       <button data-el="renameGraph" class="ghostBtn" title="Rename this graph">✎</button>
-      <button data-el="dropGraph" class="ghostBtn" title="Delete this graph (the conversations survive)">✕</button>
+      <button data-el="dropGraph" class="ghostBtn quit" title="Delete this graph (the conversations survive)">✕</button>
     </div>
 
     <div class="barRight">
+      <button data-el="atlasBtn" class="hudBtn" title="Every graph at once — what they stand on, and what they share (A)">⁂ ATLAS</button>
       <button data-el="importBtn" class="hudBtn" title="Draw the conversations you already have as graphs">⇱ IMPORT</button>
       <button data-el="addDoc" class="hudBtn" title="Put a book on the canvas as a source">◆ BOOK</button>
       <button data-el="addThread" class="hudBtn" title="Put a conversation you already have on the canvas">◈ THREAD</button>
@@ -95,7 +96,7 @@ const MARKUP = `
 
   <div class="readout" data-el="readout" aria-hidden="true"></div>
 
-  <div class="canvasHint" data-el="hint">DRAG OR SCROLL TO PAN · PINCH TO ZOOM · DRAG THE ○ PORT TO PULL A NEW LINE · F FIT · L TIDY</div>
+  <div class="canvasHint" data-el="hint">DRAG OR SCROLL TO PAN · DRAG THE ○ PORT TO PULL A NEW LINE · A ATLAS · F FIT · L TIDY</div>
 
   <aside data-el="inspector" class="inspector hidden" aria-label="Point inspector">
     <header class="inspTop">
@@ -104,9 +105,10 @@ const MARKUP = `
         <h2 data-el="inspTitle">—</h2>
         <p class="inspSub" data-el="inspSub">—</p>
       </div>
+      <button data-el="inspUsage" class="hudBtn hidden" title="Also on other graphs — see where">⁂</button>
       <button data-el="inspRead" class="hudBtn hidden" title="Read this conversation in the deck behind">▤ IN DECK</button>
       <button data-el="inspBranch" class="hudBtn" title="Open a new conversation from this point">⑂ BRANCH</button>
-      <button data-el="inspClose" class="ghostBtn" title="Close (ESC)">✕</button>
+      <button data-el="inspClose" class="ghostBtn quit" title="Close (ESC)">✕</button>
     </header>
 
     <section class="sources" data-el="sources"></section>
@@ -122,18 +124,24 @@ const MARKUP = `
       <div class="composerRow">
         <textarea data-el="cInput" rows="1" placeholder="ASK THIS POINT…  [ENTER]"></textarea>
         <button data-el="cSend" type="submit" class="hudBtn primary">SEND</button>
-        <button data-el="cHalt" type="button" class="ghostBtn hidden">HALT</button>
+        <button data-el="cHalt" type="button" class="ghostBtn quit hidden">HALT</button>
       </div>
     </form>
   </aside>
 
   <div data-el="snacks" class="snacks" aria-live="polite"></div>
 
+  <!-- Swapping the file behind a book is an upload, and the canvas carries its
+       own picker for it. Mounted inside the deck's modal it must not reach for
+       the page's input: that one belongs to the deck, and firing it would file
+       the upload against whatever record the stack happens to be showing. -->
+  <input data-el="docFile" type="file" accept=".pdf,.docx,.rtf,.txt,.md,.csv" hidden />
+
   <div data-el="sheet" class="modal hidden" role="dialog" aria-modal="true">
     <div class="modalBox sheetBox">
       <header class="modalTop">
         <span data-el="sheetTitle">—</span>
-        <button data-el="sheetClose" class="ghostBtn">✕</button>
+        <button data-el="sheetClose" class="ghostBtn quit" title="Close (ESC)">✕</button>
       </header>
       <div data-el="sheetBody" class="sheetBody"></div>
       <footer data-el="sheetActs" class="modalActs"></footer>
@@ -150,7 +158,7 @@ const MARKUP = `
         <p data-el="modalErr" class="modalErr"></p>
       </div>
       <footer class="modalActs">
-        <button data-el="modalCancel" class="hudBtn">CANCEL</button>
+        <button data-el="modalCancel" class="hudBtn quit">CANCEL</button>
         <button data-el="modalOk" class="hudBtn primary">CONFIRM</button>
       </footer>
     </div>
@@ -426,6 +434,9 @@ function cardHtml(n) {
   const isDoc = n.kind === 'document';
   const tag = isDoc ? `V${pinnedVersion(n)}` : 'CHAT';
   const sources = parentsOf(n.id).length;
+  // Nothing here is a copy, so a subject standing on other canvases is standing
+  // on them right now — an answer sent here is an answer they all read next.
+  const elsewhere = n.other_graphs ?? 0;
 
   return `
     <div class="port in" data-port="in" title="${sources} source${sources === 1 ? '' : 's'} feed this point"></div>
@@ -445,6 +456,10 @@ function cardHtml(n) {
         : '<button class="nodeAct" data-act="open">▸ OPEN</button>'
           + '<button class="nodeAct" data-act="branch">⑂ BRANCH</button>'}
       <span class="spacer"></span>
+      ${elsewhere ? `<button class="nodeAct shared" data-act="usage"
+          title="Also on ${elsewhere} other graph${elsewhere === 1 ? '' : 's'} — the same ${isDoc ? 'book' : 'conversation'}, not a copy">⁂${elsewhere}</button>` : ''}
+      ${!isDoc && n.source_count ? `<span class="nodeMeta attached" title="Reads ${n.source_count} source${
+        n.source_count === 1 ? '' : 's'} that are not on this canvas — open the point to see them">+${n.source_count}</span>` : ''}
       ${sources ? `<span class="nodeMeta" title="Lines feeding this point">↥${sources}</span>` : ''}
       <button class="nodeAct warn" data-act="remove" title="Take this point off the canvas">✕</button>
     </footer>`;
@@ -778,6 +793,12 @@ el.points.addEventListener('click', async (ev) => {
     return;
   }
 
+  if (act === 'usage') {
+    const n = byNode.get(id);
+    if (n) return void openUsage(n.kind, n.kind === 'document' ? n.document_id : n.thread_id, titleOf(n));
+    return;
+  }
+
   if (act === 'remove') return void removePoint(id);
 });
 
@@ -890,6 +911,14 @@ async function openPoint(id) {
   el.inspGlyph.textContent = glyphOf(n);
   el.inspTitle.textContent = titleOf(n);
 
+  // Standing on other canvases is a property of the point worth carrying in the
+  // header: everything below this line writes to something they are all reading.
+  const elsewhere = n.other_graphs ?? 0;
+  el.inspUsage.classList.toggle('hidden', !elsewhere);
+  el.inspUsage.textContent = `⁂ ${elsewhere}`;
+  el.inspUsage.title = `Also on ${elsewhere} other graph${elsewhere === 1 ? '' : 's'} — the same ${
+    n.kind === 'document' ? 'book' : 'conversation'}, not a copy. Click to see where.`;
+
   if (n.kind === 'document') {
     // A book cannot be asked anything directly — the question belongs to a
     // conversation, and that is exactly the branch button below.
@@ -907,6 +936,8 @@ async function openPoint(id) {
       <div class="docActs">
         <button class="hudBtn" data-act="readDoc">▤ READ IT</button>
         <button class="hudBtn" data-act="editDoc">✎ EDIT TEXT</button>
+        <button class="hudBtn" data-act="replaceDoc"
+                title="Upload a new file into this same book — every point stays pointed at it">⇄ REPLACE FILE</button>
       </div>`;
     return;
   }
@@ -979,6 +1010,25 @@ async function refreshSources() {
   const parents = new Map(parentsOf(at).map((e) => [e.source_id, e]));
 
   const rows = src.parts.map((p) => {
+    // Attached by hand rather than drawn: it has no node on this canvas, so it
+    // has no line to cut — it is detached from the list that named it instead.
+    if (p.attached) {
+      return `
+        <div class="srcRow attached ${p.kind}">
+          <span class="srcGlyph">${p.kind === 'graph' ? '⁂' : '◈'}</span>
+          <span class="srcName" title="Attached by hand — ${esc(p.name)}${p.detail ? ` — ${esc(p.detail)}` : ''}">
+            + ${esc(p.name)}
+          </span>
+          <span class="srcSize">${fmtNum(p.chars)}c</span>
+          ${p.refKind === 'thread' ? `
+            <select class="srcMode" data-attach="${p.refId}" title="How much of that conversation is read">
+              <option value="full"${p.mode === 'last' ? '' : ' selected'}>WHOLE</option>
+              <option value="last"${p.mode === 'last' ? ' selected' : ''}>LAST</option>
+            </select>` : ''}
+          <button class="turnAct" data-detach="${p.refKind}:${p.refId}" title="Stop reading this">✕</button>
+        </div>`;
+    }
+
     const edge = parents.get(p.nodeId);
     const direct = Boolean(edge);
     return `
@@ -990,7 +1040,9 @@ async function refreshSources() {
         <span class="srcSize">${fmtNum(p.chars)}c</span>
         ${p.kind === 'document' ? `
           <button class="turnAct" data-editdoc="${p.nodeId}"
-                  title="Correct this book's text — filed as a new version">✎</button>` : ''}
+                  title="Correct this book's text — filed as a new version">✎</button>
+          <button class="turnAct" data-replacedoc="${p.nodeId}"
+                  title="Swap in a new file for this book — filed as a new version">⇄</button>` : ''}
         ${direct ? `
           <select class="srcMode" data-edge="${edge.id}" title="What this line carries">
             <option value="full"${edge.mode === 'full' ? ' selected' : ''}>WHOLE</option>
@@ -1001,19 +1053,61 @@ async function refreshSources() {
       </div>`;
   }).join('');
 
+  // Attached, but not in the text: empty, or already carried in by a line. It is
+  // still on the list, so it is still shown — with the reason it costs nothing,
+  // and the same ✕ to take it off.
+  const carried = new Set(src.parts.filter((p) => p.attached).map((p) => `${p.refKind}:${p.refId}`));
+  const idleRows = (src.attached ?? [])
+    .filter((a) => !carried.has(`${a.kind}:${a.ref_id}`))
+    .map((a) => {
+      const why = a.kind === 'graph'
+        ? (a.points ? 'nothing in it to read' : 'empty graph')
+        : (a.messages ? 'already read through a line' : 'nothing said in it yet');
+      return `
+        <div class="srcRow attached idle ${a.kind}">
+          <span class="srcGlyph">${a.kind === 'graph' ? '⁂' : '◈'}</span>
+          <span class="srcName" title="Attached, but carries nothing — ${esc(why)}">+ ${esc(a.title ?? '—')}</span>
+          <span class="srcSize">${esc(why)}</span>
+          <button class="turnAct" data-detach="${a.kind}:${a.ref_id}" title="Stop reading this">✕</button>
+        </div>`;
+    }).join('');
+
   el.sources.innerHTML = `
     <div class="sourcesTop">
       <b>READS</b>
       <span>${src.parts.length} SOURCE${src.parts.length === 1 ? '' : 'S'} · ${fmtNum(src.chars)} CHARS</span>
       <span class="spacer"></span>
+      <button class="turnAct" data-act="addsrc"
+              title="Read another conversation, or a whole graph, without drawing a line">+ SOURCE</button>
       ${src.parts.length ? '<button class="turnAct" data-act="peek">PREVIEW</button>' : ''}
     </div>
-    ${rows || '<p class="srcNone">No sources. This point is a conversation with nothing behind it — drag a line into its left port to give it one.</p>'}`;
+    ${rows}${idleRows}
+    ${rows || idleRows ? '' : '<p class="srcNone">No sources. This point is a conversation with nothing behind it — drag a line into its left port, or press + SOURCE to read something that is not on this canvas.</p>'}`;
 }
 
 el.sources.addEventListener('change', async (ev) => {
   const sel = ev.target.closest('.srcMode');
   if (!sel) return;
+
+  // An attached source has no edge to patch: its mode lives on the list, so the
+  // whole list is written back with that one row changed.
+  if (sel.dataset.attach) {
+    const threadId = byNode.get(selected)?.thread_id;
+    if (!threadId) return;
+    try {
+      const { items } = await api(`/api/threads/${threadId}/sources`);
+      await put(`/api/threads/${threadId}/sources`, {
+        items: items.map((i) => ({
+          kind: i.kind,
+          id: i.ref_id,
+          mode: i.kind === 'thread' && String(i.ref_id) === sel.dataset.attach ? sel.value : i.mode,
+        })),
+      });
+      refreshSources();
+    } catch (err) { toast(err.message, 'err'); }
+    return;
+  }
+
   try {
     await patch(`/api/graphs/${graphId}/edges/${sel.dataset.edge}`, { mode: sel.value });
     await reload();
@@ -1033,6 +1127,37 @@ el.sources.addEventListener('click', async (ev) => {
       documentId: n.document_id, filename: n.doc_filename, kind: n.doc_kind,
       seedVersion: n.doc_version ?? null, newest: n.doc_newest,
     });
+  }
+
+  const swap = ev.target.closest('[data-replacedoc]');
+  if (swap) {
+    const n = byNode.get(Number(swap.dataset.replacedoc));
+    if (n?.document_id == null) return;
+    return void replaceDocumentSource({ documentId: n.document_id, filename: n.doc_filename });
+  }
+
+  const off = ev.target.closest('[data-detach]');
+  if (off) {
+    const threadId = byNode.get(selected)?.thread_id;
+    if (!threadId) return;
+    const [kind, id] = off.dataset.detach.split(':');
+    try {
+      const { items } = await api(`/api/threads/${threadId}/sources`);
+      await put(`/api/threads/${threadId}/sources`, {
+        items: items
+          .filter((i) => !(i.kind === kind && String(i.ref_id) === id))
+          .map((i) => ({ kind: i.kind, id: i.ref_id, mode: i.mode })),
+      });
+      refreshSources();
+      toast('No longer read by this point', 'info');
+    } catch (err) { toast(err.message, 'err'); }
+    return;
+  }
+
+  if (ev.target.closest('[data-act="addsrc"]')) {
+    const n = byNode.get(selected);
+    if (n?.thread_id) pickExtraSources(n.thread_id);
+    return;
   }
 
   const cut = ev.target.closest('[data-cut]');
@@ -1084,7 +1209,10 @@ async function readDocument({ documentId, filename, version, newest }) {
     openSheet({
       title: `${String(filename ?? '').toUpperCase()}${version != null && version !== newest ? ` · V${version}` : ''}`,
       body: `<div class="srcPreview">${esc(text)}</div>`,
-      acts: [{ label: '✎ EDIT TEXT', run: () => openDocEditor({ documentId, filename, seedVersion: version, newest }) }],
+      acts: [
+        { label: '✎ EDIT TEXT', run: () => openDocEditor({ documentId, filename, seedVersion: version, newest }) },
+        { label: '⇄ REPLACE FILE', run: () => { closeSheet(); replaceDocumentSource({ documentId, filename }); } },
+      ],
     });
   } catch (err) { toast(err.message, 'err'); }
 }
@@ -1109,8 +1237,8 @@ async function openDocEditor({ documentId, filename, kind = null, seedVersion = 
     body: `<p class="modalWhat">${esc(notes.join(' '))}</p>
            <textarea class="docEditor" spellcheck="false"></textarea>`,
     acts: [
-      { label: 'CANCEL', run: () => closeSheet() },
-      { label: 'SAVE AS NEW VERSION', run: (btn) => saveDocEditor(documentId, btn) },
+      { label: 'CANCEL', tone: 'quit', run: () => closeSheet() },
+      { label: 'SAVE AS NEW VERSION', tone: 'go', run: (btn) => saveDocEditor(documentId, btn) },
     ],
   });
 
@@ -1129,7 +1257,6 @@ async function saveDocEditor(documentId, btn) {
   try {
     const saved = await put(`/api/documents/${documentId}/text`, { text: box.value });
     closeSheet();
-    if (saved.unchanged) return toast('Nothing changed — the text is identical', 'info');
 
     // Every card carrying this book shows a stale char count and a stale draft
     // count, and any point reading it shows a stale source size.
@@ -1140,13 +1267,75 @@ async function saveDocEditor(documentId, btn) {
       if (n?.kind === 'document') await openPoint(selected);
       else refreshSources();
     }
-    toast(`Saved as v${saved.version} · +${saved.additions} −${saved.deletions}`);
+    toast(saved.identical
+      ? `Saved as v${saved.version} — the text is identical to v${saved.version - 1}`
+      : `Saved as v${saved.version} · +${saved.additions} −${saved.deletions}`);
   } catch (err) {
     toast(err.message, 'err');
   } finally {
     if (btn) { btn.disabled = false; btn.textContent = label; }
   }
 }
+
+/*
+ * The other half of correcting a book. EDIT TEXT rewrites what the models read
+ * and leaves the uploaded bytes alone; REPLACE FILE brings a whole new document
+ * into the same slot — new bytes, new extracted text, possibly a new kind —
+ * without disturbing the graph, because a point is a pointer at the book, not
+ * at the file that happened to fill it. Every line already drawn survives.
+ */
+let replaceTarget = null;
+
+function replaceDocumentSource({ documentId, filename }) {
+  replaceTarget = { documentId, filename };
+  el.docFile.value = '';
+  el.docFile.click();
+}
+
+el.docFile.addEventListener('change', async () => {
+  const file = el.docFile.files?.[0];
+  el.docFile.value = '';
+  const target = replaceTarget;
+  replaceTarget = null;
+  if (!file || !target) return;
+
+  toast(`Replacing ${clip(target.filename ?? 'the book', 28)} with ${clip(file.name, 28)}…`, 'info');
+  try {
+    const form = new FormData();
+    form.append('file', file);
+    const out = await api(`/api/documents/${target.documentId}/replace`, { method: 'POST', body: form });
+
+    // Every card carrying this book is now stale — chars, pages, draft count —
+    // and so is the source size on every point reading it.
+    await reload();
+    host.onArchiveChanged?.();
+    if (selected != null) {
+      const n = byNode.get(selected);
+      if (n?.kind === 'document') await openPoint(selected);
+      else refreshSources();
+    }
+
+    // Which points moved matters here in a way it does not on the deck. A point
+    // pinned to a draft stays on that draft and is answered from it as before;
+    // only the ones reading `newest` are answered from what was just uploaded,
+    // and saying so is cheaper than letting someone find it out mid-argument.
+    const pinned = nodes.filter((n) => n.document_id === target.documentId && n.doc_version != null).length;
+    const held = pinned
+      ? ` · ${pinned} point${pinned === 1 ? '' : 's'} stay${pinned === 1 ? 's' : ''} pinned to an older draft`
+      : '';
+    const moved = out.identical
+      ? `Filed as v${out.version} — the file was swapped, the text is identical`
+      : `Filed as v${out.version} — the previous text is kept`;
+    toast(`${moved}${held}`, 'ok', {
+      label: '▤ READ IT',
+      run: () => readDocument({
+        documentId: target.documentId, filename: out.filename ?? target.filename, version: null, newest: null,
+      }),
+    });
+  } catch (err) {
+    toast(`Replace failed — ${err.message}`, 'err');
+  }
+});
 
 function closeInspector() {
   if (selected != null) stashDraft();
@@ -1159,6 +1348,12 @@ function closeInspector() {
 }
 
 el.inspClose.addEventListener('click', closeInspector);
+
+el.inspUsage.addEventListener('click', () => {
+  const n = selected != null ? byNode.get(selected) : null;
+  if (!n) return;
+  openUsage(n.kind, n.kind === 'document' ? n.document_id : n.thread_id, titleOf(n));
+});
 
 // Only mounted over a deck does this mean anything: hand the conversation back
 // to the stack behind, which is where its document, traces and exports live.
@@ -1255,9 +1450,12 @@ el.inspLog.addEventListener('click', async (ev) => {
 
   // A book's own two actions. They belong before the message lookup: a source
   // point has no messages at all, so anything gated on one never runs there.
-  if (act === 'readDoc' || act === 'editDoc') {
+  if (act === 'readDoc' || act === 'editDoc' || act === 'replaceDoc') {
     const n = selected != null ? byNode.get(selected) : null;
     if (n?.document_id == null) return;
+    if (act === 'replaceDoc') {
+      return void replaceDocumentSource({ documentId: n.document_id, filename: n.doc_filename });
+    }
     const at = n.doc_version ?? null;
     return void (act === 'readDoc'
       ? readDocument({ documentId: n.document_id, filename: n.doc_filename, version: at, newest: n.doc_newest })
@@ -1458,6 +1656,19 @@ async function loadLibrary() {
   library = await api('/api/graph-library');
 }
 
+/*
+ * What a picker row owes you before you press it: this is already standing
+ * somewhere. Placing it again is a real move — the same conversation on two
+ * canvases is one conversation read two ways — but it is a different move from
+ * starting a fresh one, and the row should say which you are about to make.
+ */
+const onGraphs = (list) => {
+  const other = (list ?? []).filter((g) => g.id !== graphId);
+  if (!other.length) return '';
+  return ` · <span class="pickOn" title="${esc(other.map((g) => g.title).join(', '))}">⁂ ON ${
+    other.length === 1 ? esc(clip(other[0].title, 22)).toUpperCase() : `${other.length} OTHER GRAPHS`}</span>`;
+};
+
 async function pickDocument() {
   await loadLibrary();
   if (!library.documents.length) {
@@ -1476,7 +1687,7 @@ async function pickDocument() {
           <span class="pickGlyph">◆</span>
           <span class="pickMain">
             <span class="pickName">${esc(d.filename)}</span>
-            <span class="pickMeta">${fmtNum(d.chars)} CHARS · ${d.version} VERSION${d.version === 1 ? '' : 'S'} · ${d.thread_count} CONVERSATION${d.thread_count === 1 ? '' : 'S'} · ${esc(fmtWhen(d.created_at))}</span>
+            <span class="pickMeta">${fmtNum(d.chars)} CHARS · ${d.version} VERSION${d.version === 1 ? '' : 'S'} · ${d.thread_count} CONVERSATION${d.thread_count === 1 ? '' : 'S'} · ${esc(fmtWhen(d.created_at))}${onGraphs(d.graphs)}</span>
           </span>
         </button>`).join(''),
     onPick: async (target) => {
@@ -1512,7 +1723,7 @@ async function pickThread() {
           <span class="pickGlyph">◈</span>
           <span class="pickMain">
             <span class="pickName">${esc(t.title)}</span>
-            <span class="pickMeta">${t.message_count} MSG${t.filename ? ` · ◆ ${esc(t.filename)}` : ' · NO BOOK'} · ${esc(fmtWhen(t.updated_at))}</span>
+            <span class="pickMeta">${t.message_count} MSG${t.filename ? ` · ◆ ${esc(t.filename)}` : ' · NO BOOK'} · ${esc(fmtWhen(t.updated_at))}${onGraphs(t.graphs)}</span>
           </span>
         </button>`).join(''),
     onPick: async (target) => {
@@ -1529,11 +1740,321 @@ async function pickThread() {
   });
 }
 
+/* --------------------------------------------------------- extra sources
+
+   A line is the canvas's way of saying "answer me from that", and it only
+   reaches what is standing here. This is the other way: a conversation or a
+   whole graph that is not on this canvas at all, ticked from a list, read by
+   this point from the next turn on. The list belongs to the conversation, so it
+   travels with it to the deck and to every other canvas it stands on.
+   ---------------------------------------------------------------------- */
+
+/** Every conversation this point already reads through the lines drawn to it. */
+function upstreamThreadIds(nodeId) {
+  const seen = new Set();
+  const out = new Set();
+  const walk = (id) => {
+    for (const e of parentsOf(id)) {
+      if (seen.has(e.source_id)) continue;
+      seen.add(e.source_id);
+      const n = byNode.get(e.source_id);
+      if (n?.thread_id) out.add(n.thread_id);
+      walk(e.source_id);
+    }
+  };
+  if (nodeId != null) walk(nodeId);
+  return out;
+}
+
+async function pickExtraSources(threadId) {
+  openSheet({ title: '⁂ EXTRA SOURCES', body: '<p class="logNote">READING THE ARCHIVE…</p>' });
+
+  let catalog;
+  let mine;
+  try {
+    [catalog, mine] = await Promise.all([
+      api(`/api/source-catalog?thread=${threadId}`),
+      api(`/api/threads/${threadId}/sources`),
+    ]);
+  } catch (err) {
+    return openSheet({ title: '⁂ EXTRA SOURCES', body: `<p class="logNote">${esc(err.message)}</p>` });
+  }
+
+  const on = new Map(mine.items.map((i) => [`${i.kind}:${i.ref_id}`, i]));
+  const rank = (kind, x) => (on.has(`${kind}:${x.id}`) ? on.get(`${kind}:${x.id}`).position : Infinity);
+
+  // Conversations already upstream of this point are left out: they are read
+  // through the line, and offering them again would send the same transcript
+  // twice.
+  const upstream = upstreamThreadIds(selected);
+  const threads = catalog.threads
+    .filter((t) => !upstream.has(t.id))
+    .sort((a, b) => rank('thread', a) - rank('thread', b));
+  // The open graph is not offered: this point stands on it, so reading it would
+  // be reading its own transcript back to itself.
+  const graphs = catalog.graphs
+    .filter((g) => g.id !== graphId)
+    .sort((a, b) => rank('graph', a) - rank('graph', b));
+
+  const threadRows = threads.map((t) => {
+    const cur = on.get(`thread:${t.id}`);
+    return `
+      <label class="pickRow thread srcPick${cur ? ' on' : ''}">
+        <input type="checkbox" class="pickBox srcBox" data-kind="thread" data-id="${t.id}"${cur ? ' checked' : ''} />
+        <span class="pickGlyph">◈</span>
+        <span class="pickMain">
+          <span class="pickName">${esc(t.title)}</span>
+          <span class="pickMeta">${t.messages} MSG${t.filename ? ` · ◆ ${esc(t.filename)}` : ''} · ${
+            esc(fmtWhen(t.updated_at))}${t.messages ? '' : ' · EMPTY, CARRIES NOTHING'}</span>
+        </span>
+        <select class="hudSelect srcModeSel" data-id="${t.id}" title="How much of that conversation is read">
+          <option value="full"${cur?.mode === 'last' ? '' : ' selected'}>WHOLE</option>
+          <option value="last"${cur?.mode === 'last' ? ' selected' : ''}>LAST ANSWER</option>
+        </select>
+      </label>`;
+  }).join('');
+
+  const graphRows = graphs.map((g) => {
+    const cur = on.get(`graph:${g.id}`);
+    return `
+      <label class="pickRow srcPick${cur ? ' on' : ''}">
+        <input type="checkbox" class="pickBox srcBox" data-kind="graph" data-id="${g.id}"${cur ? ' checked' : ''} />
+        <span class="pickGlyph">⁂</span>
+        <span class="pickMain">
+          <span class="pickName">${esc(g.title)}</span>
+          <span class="pickMeta">${g.points} POINT${g.points === 1 ? '' : 'S'} · ${g.lines} LINE${
+            g.lines === 1 ? '' : 'S'} · ${g.books} BOOK${g.books === 1 ? '' : 'S'} · ${esc(fmtWhen(g.updated_at))}${
+            g.points ? '' : ' · EMPTY, CARRIES NOTHING'}</span>
+        </span>
+      </label>`;
+  }).join('');
+
+  openSheet({
+    title: '⁂ EXTRA SOURCES',
+    body: `
+      <p class="modalWhat">Read something that is not on this canvas. A conversation comes as its
+         transcript, a whole graph as all of its points and the lines between them — assembled
+         when you send, so it is always as they stand now. This is saved on the conversation,
+         not on the canvas: every graph it is on reads it.</p>
+      ${mine.summary.chars ? `<p class="modalWhat">Now carrying ${fmtNum(mine.summary.chars)} characters into every turn on this point.</p>` : ''}
+      <h3 class="srcPickHead">CONVERSATIONS</h3>
+      ${threadRows || '<p class="logNote">NOTHING ELSE TO READ — EVERY OTHER CONVERSATION IS ALREADY UPSTREAM OF THIS POINT.</p>'}
+      <h3 class="srcPickHead">GRAPHS</h3>
+      ${graphRows || '<p class="logNote">NO OTHER GRAPHS YET.</p>'}`,
+    acts: [
+      { label: 'CANCEL', tone: 'quit', run: () => closeSheet() },
+      {
+        label: 'SAVE SOURCES',
+        tone: 'go',
+        run: async (btn) => {
+          const items = [...el.sheetBody.querySelectorAll('.srcBox:checked')].map((b) => ({
+            kind: b.dataset.kind,
+            id: Number(b.dataset.id),
+            mode: b.dataset.kind === 'thread'
+              ? (el.sheetBody.querySelector(`.srcModeSel[data-id="${b.dataset.id}"]`)?.value ?? 'full')
+              : 'full',
+          }));
+          btn.disabled = true;
+          try {
+            const saved = await put(`/api/threads/${threadId}/sources`, { items });
+            closeSheet();
+            refreshSources();
+            host.onArchiveChanged?.();
+            toast(saved.items.length
+              ? `Reading ${saved.items.length} extra source${saved.items.length === 1 ? '' : 's'} from the next turn`
+              : 'Extra sources cleared');
+          } catch (err) {
+            btn.disabled = false;
+            toast(err.message, 'err');
+          }
+        },
+      },
+    ],
+  });
+
+  // Inside a <label>, a click on the mode picker would toggle the tick as well.
+  el.sheetBody.querySelectorAll('.srcModeSel').forEach((sel) =>
+    sel.addEventListener('click', (ev) => ev.preventDefault()));
+  el.sheetBody.querySelectorAll('.srcBox').forEach((box) =>
+    box.addEventListener('change', () => box.closest('.pickRow').classList.toggle('on', box.checked)));
+}
+
 /** Placing a point with no graph open creates the graph it goes on. */
 async function ensureGraph() {
   if (graphId != null) return;
   const g = await post('/api/graphs', { title: 'New graph' });
   await loadGraphs({ select: g.id });
+}
+
+/* ==========================================================================
+   The atlas — the shelf instead of one canvas.
+
+   Standing inside a graph, the one question you cannot answer is what it has to
+   do with the others. The schema always allowed a book or a conversation to
+   stand on several canvases at once (a point is a pointer, so there is nothing
+   to copy), but nothing ever said so: two graphs could be answering from the
+   same book, or the very same conversation, and the only way to find out was to
+   open them both and recognise a filename.
+
+   So the atlas is not a second canvas. It names things and says where they are:
+   every graph, what each one stands on, what any two of them hold in common,
+   and — the line that matters — which subjects are shared, because those are
+   the ones where an edit in one place lands in every other.
+   ========================================================================== */
+
+async function openAtlas() {
+  let atlas;
+  try {
+    atlas = await api('/api/graph-atlas');
+  } catch (err) { return toast(err.message, 'err'); }
+
+  const t = atlas.totals;
+  if (!t.graphs) {
+    return openSheet({
+      title: 'ATLAS',
+      body: `<p class="modalWhat">No graphs yet. Put a book or a conversation down and this
+             becomes the shelf: every graph, what it stands on, and what it shares.</p>`,
+      acts: [{ label: 'CLOSE', tone: 'quit', run: () => closeSheet() }],
+    });
+  }
+
+  const glyph = (kind) => (kind === 'document' ? '◆' : '◈');
+
+  // Shared first, and deliberately so: it is the only section that tells you
+  // something you could not have seen from inside a graph.
+  const sharedRows = atlas.shared.map((i) => `
+    <div class="atlasItem">
+      <span class="pickGlyph">${glyph(i.kind)}</span>
+      <span class="pickMain">
+        <span class="pickName">${esc(i.name)}</span>
+        <span class="pickMeta">${i.kind === 'document'
+          ? `${fmtNum(i.chars)} CHARS · V${i.newest} · ${i.threads} RECORD${i.threads === 1 ? '' : 'S'}`
+          : `${i.messages} MSG · ${esc(fmtWhen(i.updated_at))}`} · ${i.points} POINT${i.points === 1 ? '' : 'S'}</span>
+        <span class="atlasOn">${i.graphs.map((g) => `
+          <button class="atlasChip${g.id === graphId ? ' here' : ''}" data-go="${g.id}"
+                  title="Open ${esc(g.title)}">${esc(g.title)}</button>`).join('')}</span>
+      </span>
+      <button class="turnAct" data-place="${i.kind}:${i.id}"
+              title="Put this on the canvas that is open">+ HERE</button>
+    </div>`).join('');
+
+  const graphRows = atlas.graphs.map((g) => {
+    const holds = [
+      ...g.documents.map((d) => `<span class="atlasHold doc" title="${esc(d.name)}${
+        d.pins?.length ? ` — pinned to v${d.pins.join(', v')}` : ''}">◆ ${esc(clip(d.name, 26))}${
+        d.points > 1 ? ` ×${d.points}` : ''}</span>`),
+      ...g.threads.map((th) => `<span class="atlasHold" title="${esc(th.name)} — ${th.messages} messages">◈ ${esc(clip(th.name, 26))}${
+        th.points > 1 ? ` ×${th.points}` : ''}</span>`),
+    ].join('');
+
+    const shares = g.shares.length
+      ? `<div class="atlasShare">SHARES ${g.shares.map((sh) => `
+          <button class="atlasChip" data-go="${sh.id}" title="${esc(sh.items.map((x) => x.name).join(', '))}">${
+            esc(sh.title)} · ${sh.items.length}</button>`).join('')}</div>`
+      : '<div class="atlasShare alone">STANDS ALONE — nothing on it is on any other graph</div>';
+
+    return `
+      <div class="atlasGraph${g.id === graphId ? ' current' : ''}">
+        <div class="atlasTop">
+          <button class="atlasName" data-go="${g.id}">⁂ ${esc(g.title)}</button>
+          <span class="pickMeta">${g.node_count} PT${g.node_count === 1 ? '' : 'S'} · ${g.edge_count} LINE${
+            g.edge_count === 1 ? '' : 'S'} · ${esc(fmtWhen(g.updated_at))}${g.id === graphId ? ' · OPEN' : ''}</span>
+        </div>
+        ${holds ? `<div class="atlasHolds">${holds}</div>` : '<div class="atlasShare alone">EMPTY CANVAS</div>'}
+        ${shares}
+      </div>`;
+  }).join('');
+
+  openSheet({
+    title: `ATLAS · ${t.graphs} GRAPH${t.graphs === 1 ? '' : 'S'}`,
+    body: `
+      <div class="atlasTotals">
+        <span><b>${t.graphs}</b> GRAPHS</span>
+        <span><b>${t.nodes}</b> POINTS</span>
+        <span><b>${t.edges}</b> LINES</span>
+        <span><b>${t.documents}</b> BOOKS</span>
+        <span><b>${t.threads}</b> CONVERSATIONS</span>
+        <span class="${t.shared ? 'hot' : ''}"><b>${t.shared}</b> SHARED</span>
+        <span><b>${t.isolated}</b> STANDING ALONE</span>
+      </div>
+      <p class="modalWhat">A point is a pointer, so a book or a conversation on two graphs is one
+         thing seen twice — answer it on one canvas and every other canvas reads the answer next.
+         The shared list is where that is true.</p>
+      ${t.shared ? `<h3 class="atlasHead">SHARED ACROSS GRAPHS</h3>${sharedRows}` : ''}
+      <h3 class="atlasHead">EVERY GRAPH</h3>
+      ${graphRows}`,
+    acts: [{ label: 'CLOSE', tone: 'quit', run: () => closeSheet() }],
+    onPick: async (target) => {
+      const go = target.closest('[data-go]');
+      if (go) {
+        closeSheet();
+        return void travelTo(Number(go.dataset.go));
+      }
+      const place = target.closest('[data-place]');
+      if (place) {
+        const [kind, id] = place.dataset.place.split(':');
+        closeSheet();
+        return void placeSubject(kind, Number(id));
+      }
+    },
+  });
+}
+
+/** Open another graph, optionally landing on one of its points. */
+async function travelTo(id, nodeId = null) {
+  if (!graphs.some((g) => g.id === id)) await loadGraphs({ select: id });
+  else if (graphId !== id) await openGraph(id);
+  if (nodeId != null && byNode.has(nodeId)) openPoint(nodeId);
+  const name = graphs.find((g) => g.id === id)?.title;
+  if (name) toast(`On ⁂ ${name}`, 'info');
+}
+
+/** Put a book or a conversation already used elsewhere onto the open canvas. */
+async function placeSubject(kind, id) {
+  try {
+    await ensureGraph();
+    const at = centreOfView();
+    const body = kind === 'document' ? { kind: 'document', documentId: id, ...at } : { kind: 'thread', threadId: id, ...at };
+    const made = await post(`/api/graphs/${graphId}/nodes`, body);
+    await reload();
+    if (nodes.length === 1) fitAll();
+    openPoint(made.node.id);
+    toast('Placed here — the same point, not a copy of it');
+  } catch (err) { toast(err.message, 'err'); }
+}
+
+/** Where else this exact book or conversation stands, and a way to go there. */
+async function openUsage(kind, id, name) {
+  if (id == null) return;
+  let graphsOn;
+  try {
+    const q = kind === 'document' ? `document=${id}` : `thread=${id}`;
+    graphsOn = (await api(`/api/graph-usage?${q}`)).graphs;
+  } catch (err) { return toast(err.message, 'err'); }
+
+  const rows = graphsOn.map((g) => `
+    <button class="pickRow${kind === 'thread' ? ' thread' : ''}" data-go="${g.id}" data-node="${g.node_id}">
+      <span class="pickGlyph">⁂</span>
+      <span class="pickMain">
+        <span class="pickName">${esc(g.title)}${g.id === graphId ? ' · this canvas' : ''}</span>
+        <span class="pickMeta">${g.points} POINT${g.points === 1 ? '' : 'S'} · ${esc(fmtWhen(g.updated_at))}</span>
+      </span>
+    </button>`).join('');
+
+  openSheet({
+    title: `ON ${graphsOn.length} GRAPH${graphsOn.length === 1 ? '' : 'S'} · ${String(name ?? '').toUpperCase()}`,
+    body: `<p class="modalWhat">The same ${kind === 'document' ? 'book' : 'conversation'}, standing on each of
+           these canvases — not a copy on any of them. ${kind === 'document'
+             ? 'Correcting its text here changes what every point on every graph is answered from, except the ones pinned to an older draft.'
+             : 'A turn sent here is a turn every one of them shows.'}</p>${rows}`,
+    acts: [{ label: 'CLOSE', tone: 'quit', run: () => closeSheet() }],
+    onPick: (target) => {
+      const go = target.closest('[data-go]');
+      if (!go) return;
+      closeSheet();
+      travelTo(Number(go.dataset.go), Number(go.dataset.node));
+    },
+  });
 }
 
 /* ------------------------------------------------------------------ layout */
@@ -1658,6 +2179,7 @@ el.dropGraph.addEventListener('click', async () => {
   toast('Graph deleted — the conversations are still on the deck', 'info');
 });
 
+el.atlasBtn.addEventListener('click', openAtlas);
 el.importBtn.addEventListener('click', openImport);
 $('seedImport').addEventListener('click', openImport);
 el.addDoc.addEventListener('click', pickDocument);
@@ -1682,6 +2204,7 @@ document.addEventListener('keydown', (ev) => {
   }
   if (typing) return;
 
+  if (ev.key === 'a' || ev.key === 'A') { ev.preventDefault(); openAtlas(); }
   if (ev.key === 'f' || ev.key === 'F') { ev.preventDefault(); fitAll(); }
   if (ev.key === 'l' || ev.key === 'L') { ev.preventDefault(); tidy(); }
   if (ev.key === '0') { cam.z = 1; applyCam(); renderReadout(); }
@@ -1726,7 +2249,9 @@ function openSheet({ title, body, acts = [], onPick = null }) {
   el.sheetActs.innerHTML = '';
   for (const a of acts) {
     const btn = document.createElement('button');
-    btn.className = `hudBtn${a.danger ? ' danger' : ''}`;
+    // `tone` is what the button does, not what it says: 'go' writes, 'quit'
+    // leaves. A sheet with SAVE and CANCEL side by side is the whole reason.
+    btn.className = `hudBtn${a.danger ? ' danger' : ''}${a.tone ? ` ${a.tone}` : ''}`;
     btn.textContent = a.label;
     // The button is handed to its own action so a slow write can disable it and
     // say so, rather than leaving a live button over an in-flight save.
@@ -1771,7 +2296,10 @@ function openModal({ title, what = '', label = null, value = '', confirmWord = n
     }
 
     el.modalOk.textContent = ok;
+    // Green when the confirm writes something, filled red when it destroys —
+    // never both, or the one button is saying two things at once.
     el.modalOk.classList.toggle('danger', danger);
+    el.modalOk.classList.toggle('go', !danger);
     el.modal.classList.remove('hidden');
     (wants ? el.modalInput : el.modalOk).focus();
     if (wants && !confirmWord) el.modalInput.select();
@@ -2081,13 +2609,14 @@ export function mountConstellation(target, {
     // The corner that says "leave" on the page says "put this away" in a modal.
     if (onClose) {
       el.back.textContent = '✕ CLOSE';
+      el.back.classList.add('quit');   // it dismisses now; it should read like it
       el.back.removeAttribute('href');
       el.back.title = 'Put the graph away and go back to the deck (ESC)';
       el.back.addEventListener('click', onClose);
     } else {
       el.back.remove();
     }
-    el.hint.textContent = 'DRAG THE ○ PORT TO PULL A NEW LINE · ESC CLOSES · F FIT · L TIDY';
+    el.hint.textContent = 'DRAG THE ○ PORT TO PULL A NEW LINE · A ATLAS · ESC CLOSES · F FIT · L TIDY';
   }
 
   booted = boot().then(async () => {

@@ -114,6 +114,52 @@ prose the user explicitly asked for, so Chat keeps the first and drops the
 second. If a model ever declines to write for you, that is the prompt talking,
 not the model — check which task is selected.
 
+### Extra sources — other conversations, and whole graphs
+
+A thread reads the document it was opened on. `⁂ Sources` beside the composer
+(`⁂ SOURCES` on a record in the deck, `+ SOURCE` in the `READS` panel on a
+canvas) opens one tick list of everything else it could read: every other
+conversation, and every graph. Tick as many as you like, save, and each of them
+is sent with every question in that thread from the next turn on.
+
+| Ticked | What arrives in the prompt |
+| --- | --- |
+| a conversation, `WHOLE` | its transcript as `Q:` / `A:` turns, tail-truncated at `GRAPH_THREAD_SOURCE_CHARS`, whole turns only |
+| a conversation, `LAST ANSWER` | only its final answer |
+| a graph | its lines written out as a shape (`A → B`), then every point in order — books at their pinned version, conversations as transcripts — up to `GRAPH_SOURCE_CHARS` |
+
+Three things are worth knowing about the list:
+
+**It belongs to the conversation, not to the screen.** Attach a source on the
+deck and the same record reads it on the canvas, in the lab, and on every other
+graph it stands on. The `+2` on a graph card and the count on the `⁂ Sources`
+button are there so a conversation answering from three other places never does
+it silently.
+
+**Nothing is copied.** The text is rendered from the live rows when you press
+send, exactly like a line on a canvas: answer something in a source now and the
+next question over here reads that answer. Attaching an empty conversation
+attaches nothing, and the list says so.
+
+**It does not recurse.** A conversation attached as a source contributes its own
+transcript, not the things *it* reads; a graph contributes its own points. So
+two records may legally read each other and both still answer.
+
+The assembled body of text goes in exactly where the thread's own document would
+— so a turn with three attached sources is an ordinary turn from `streamTurn`
+down, including the context budget and the map-reduce split when it overflows.
+With more than one source in play, each is wrapped in a `<source kind= name=
+version= scope=>` block so the model can tell them apart; a lone book is still
+handed over unwrapped, as every prompt in the lab expects.
+
+The Oracle takes the same list from a different angle. It already searches every
+transcript, so `⁂ PIN SOURCES` in its header is not about reach but about
+certainty: what you pin is *given* to it — in front of the planner from the
+first round and in front of the answerer at the end — whether or not a search
+would have turned it up. A graph can only reach the Oracle this way, since
+search matches text and a graph is the shape over it. Pins live for the session
+and share one ceiling, `ORACLE_GIVEN_CHARS`.
+
 ### Retrying and editing a turn
 
 Every message carries **Copy**; your own messages also carry **Edit**. They
@@ -246,6 +292,7 @@ the record window, through the lab's own endpoints:
 | `+ UPLOAD` (top bar) | store a document and open a record for it in one step — a document no record points at would be invisible on a deck of conversations |
 | `⌘`/`Ctrl` + select in `DOCUMENT` | mark a passage, give an instruction, and it is rewritten in place — **filed as a new version**, never written over the document, so the change is reviewable as a diff and the text the threads were answered from survives |
 | `⇄ REPLACE` | re-upload into the same slot; the outgoing text is kept as its own version and the snackbar offers `REVIEW CHANGES` |
+| `✎ EDIT TEXT` | correct the text by hand, in the tab that shows it; filed as a version like everything else |
 | `⇪ FILE AS VERSION` (on any model answer) | file that answer as the next version of the document it rewrote |
 | `✎ RENAME` / `✕ REMOVE` | on the document, and on the record itself (`✎` `✕` in the window chrome) |
 | `⧉ COPY`, `⤓ DOCX`, `⤓ RTF` | the current text, any version, or a single model answer |
@@ -268,6 +315,7 @@ to the thread — a record remembers which model answered in it.
 | `↻ RETRY` | re-run the tail of a record after a failure or a halt — the failed reply is dropped, not stacked under a second one |
 | `✎ EDIT` (on your own turn) | rewrite the question and answer it again; everything after it is discarded, because it answers a question that no longer exists |
 | `☆ SAVE` → `★ SAVED` (top bar) | keep an answer and attach it to any other record as context |
+| `⁂ SOURCES` | tick other records and whole graphs for this record to read beside its own book; the count on the button is what it carries |
 | `⌕ CHECK` | ask the model to compare that answer against the source document; every difference it names is listed under the turn as a diff. The result is stored, so opening it again costs nothing |
 | `⊞ RECORD` (top bar) | a second conversation on a document already in the library — the same text read twice, without uploading it twice |
 | `⚙ LINK` (top bar) | providers, keys, models and the fallback chain — the same settings screen the lab mounts |
@@ -431,6 +479,16 @@ you send anything. Indirect ancestors are marked `↳`.
 Lines that would close a loop are refused, as is a book reading anything: a
 source reads nothing, which is what makes it a source.
 
+A line can only reach what is standing on the same canvas. For everything else
+there is `+ SOURCE` at the top of the `READS` panel: tick any conversation, or a
+whole other graph, and this point reads it from the next turn without a line and
+without putting it down here. Those sources are listed under the drawn ones,
+marked `+` rather than `↳` — nothing on this canvas points at them, so there is
+no line to cut and the `✕` detaches instead. They are saved on the conversation,
+so they travel with it to the deck and to every other canvas it stands on, and a
+card carrying them says `+n`. See
+[Extra sources](#extra-sources--other-conversations-and-whole-graphs).
+
 ### Versioning one book across many threads
 
 A book point carries a `READS` picker listing the versions that actually exist
@@ -444,6 +502,66 @@ Any answer can be filed as the next version of the book behind it with
 `⇪ FILE AS VERSION`, exactly as on the deck, and `⑂ BRANCH FROM THIS` opens a
 child that reads that one answer alone.
 
+### One archive, many canvases
+
+Nothing on a canvas is a copy, and that is not only true within one graph. The
+same book and the very same conversation can stand on as many graphs as there is
+use for them — placing one somewhere else puts down a *point*, never a second
+conversation. Answer it on one canvas and every other canvas reads that answer
+on its next turn.
+
+That was always true of the store and never visible. Now every surface says it:
+
+| Where | What it tells you |
+| --- | --- |
+| `⁂ ATLAS` (top bar, or `A`) | every graph at once — what each stands on, what any two share, which stand alone |
+| `⁂N` on a card | this book or conversation is also on N other graphs; click for the list, and travel there |
+| `⁂` in the inspector header | the same, for the point you have open |
+| the `◆ BOOK` / `◈ THREAD` pickers | `⁂ ON 2 OTHER GRAPHS` against a row, before you place it again |
+
+The atlas leads with what cannot be seen from inside a graph: **shared** — every
+book and conversation standing on more than one canvas, who holds it, and
+`+ HERE` to put it on the canvas that is open. Below that, every graph with the
+sources it stands on and a `SHARES` line naming the graphs it overlaps; a graph
+that overlaps nothing says `STANDS ALONE`, which is the honest answer to "can I
+delete this one safely".
+
+### Correcting a book from the canvas
+
+A book point is not read-only. Selecting one offers `▤ READ IT`, `✎ EDIT TEXT`
+and `⇄ REPLACE FILE`; every book in a point's `READS` panel carries the same two
+writes as `✎` and `⇄`, so a typo noticed in a source is fixed where it was
+noticed. Both file a version rather than overwriting silently:
+
+| | What changes | What stays |
+| --- | --- | --- |
+| `✎ EDIT TEXT` | `documents.text` — what the models read | the uploaded bytes; a PDF's pages are still the pages that arrived |
+| `⇄ REPLACE FILE` | text, bytes, kind, page count — a new upload into the same slot | the point, its id, its lines; nothing on the canvas is redrawn |
+
+Editing a draft you pinned to saves *forward* as the newest version, never in
+place, and the editor says so. After either write, points reading `newest` are
+answered from the new draft on their next turn and pinned points hold still —
+the snackbar says how many stayed behind.
+
+### Every save files a version
+
+A replace and a hand edit both file a version **every time**, including one that
+resolves to the text already stored. Two reasons:
+
+* A file is more than its text. Swapping a scanned PDF for the DOCX it was typed
+  from changes the kind, the bytes and the page count even when the extracted
+  text matches word for word — skipping the write left the old file in the slot
+  while telling you it had been replaced.
+* The rail is a record of what was done to a document, not only of what came out
+  different. A save that filed nothing was indistinguishable from a save that
+  failed.
+
+Such a version lands at `+0 −0` and the snackbar says the text is identical, so
+nothing claims a change nobody made. `POST /api/documents/:id/replace` and
+`PUT /api/documents/:id/text` both report it back as `identical`. Filing a
+*model's* answer with `⇪ FILE AS VERSION` is unchanged: an answer identical to
+the current text is still refused, because nobody chose that text.
+
 
 ## Storage
 
@@ -451,6 +569,9 @@ child that reads that one answer alone.
 documents  id, filename, kind, text, chars, words, pages, bytes, sha256(unique)
 threads    id, title, document_id → documents, model, created_at, updated_at
 messages   id, thread_id → threads, role, content, reasoning, model, task, ms, error
+thread_sources
+           id, thread_id → threads, kind('thread'|'graph'),
+           ref_thread_id → threads | ref_graph_id → graphs, mode('full'|'last'), position
 ```
 
 Uses Node 26's built-in `node:sqlite` — no native module to compile. WAL mode is
@@ -458,6 +579,10 @@ on, which matters because one insert can carry 600k chars of document text.
 A document is stored **once** no matter how many threads use it. Deleting a
 thread cascades to its messages; deleting a document nulls `document_id` and
 leaves the conversation readable.
+
+`thread_sources` holds what a conversation reads besides its own book — a row is
+a pointer, exactly like a graph node, so deleting the conversation or the graph
+it points at takes the row with it and never touches what was already said.
 
 Back up or inspect it with any SQLite tool:
 
@@ -628,6 +753,9 @@ curl localhost:5173/api/llm/config           # the chain actually in use
 | `MAX_TOKENS` | Output cap — **reasoning and answer share it** |
 | `MAX_TOTAL_TOKENS` | Cluster ceiling for prompt + completion combined (1,048,576) |
 | `CHARS_PER_TOKEN` | Estimate used for the sizes shown in the UI (2.9, measured on Polish) |
+| `GRAPH_THREAD_SOURCE_CHARS` | How much of a conversation travels when it is read as a source (60k) |
+| `GRAPH_SOURCE_CHARS` | Ceiling on a whole graph read as one source (120k) |
+| `ORACLE_GIVEN_CHARS` | Ceiling on everything pinned to one Oracle question (80k) |
 | `MAX_UPLOAD_BYTES` | Upload cap (40 MB) |
 | `PORT` | Local web app port |
 | `DB_PATH` | SQLite file (default `data/threads.db`) |
@@ -746,6 +874,7 @@ large document, a cache hit shows up as a dramatically lower TTFT on later turns
 | `GET` | `/api/config` | models, tasks, cluster reachability, store stats |
 | `POST` | `/api/documents` | upload + extract + save (multipart `file`) |
 | `GET` | `/api/documents` | library listing (no text) |
+| `POST` | `/api/documents/:id/replace` | re-upload into the same slot (multipart `file`); files it as the next version |
 | `PUT` | `/api/documents/:id/text` | hand-edit the text; files it as the next version |
 | `DELETE` | `/api/documents/:id` | remove from library |
 | `GET` | `/api/threads` | sidebar listing |
@@ -756,6 +885,9 @@ large document, a cache hit shows up as a dramatically lower TTFT on later turns
 | `POST` | `/api/threads/:id/messages` | send a turn, SSE stream back |
 | `POST` | `/api/threads/:id/messages/:msgId/retry` | replay a failed tail turn, SSE stream back |
 | `POST` | `/api/threads/:id/messages/:msgId/edit` | rewrite a question, drop what followed, re-run |
+| `GET` | `/api/source-catalog?thread=` | every conversation and graph that can be attached as an extra source |
+| `GET` | `/api/threads/:id/sources` | what this conversation reads besides its own book, its assembled size, and a preview |
+| `PUT` | `/api/threads/:id/sources` | replace that list — `{ items: [{ kind: 'thread'\|'graph', id, mode }] }` |
 | `GET` | `/api/traces?threadId=&limit=` | trace list (no bodies) |
 | `GET` | `/api/traces/:id` | one trace with full prompt and response |
 | `GET` | `/api/usage` | per-model and global token rollup |
@@ -768,7 +900,9 @@ large document, a cache hit shows up as a dramatically lower TTFT on later turns
 | `GET` | `/grimoire-graphs` | the graph view |
 | `GET` `POST` | `/api/graphs` | list / create a graph |
 | `GET` `PATCH` `DELETE` | `/api/graphs/:id` | one canvas (points + lines) / rename / delete |
-| `GET` | `/api/graph-library` | books and conversations a point can be seeded from |
+| `GET` | `/api/graph-library` | books and conversations a point can be seeded from, each with the graphs it already stands on |
+| `GET` | `/api/graph-atlas` | every graph, what each stands on, and what any two of them share |
+| `GET` | `/api/graph-usage?document=\|thread=` | which graphs carry one exact book or conversation |
 | `POST` | `/api/graphs/:id/nodes` | put a point down (a book, or a conversation new or existing) |
 | `PATCH` `DELETE` | `/api/graphs/:id/nodes/:nid` | move / pin a version / remove (`?withThread=1` also deletes it) |
 | `POST` | `/api/graphs/:id/edges` | draw a line (refuses loops and self-links) |

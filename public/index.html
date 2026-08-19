@@ -69,6 +69,8 @@
 
     <div class="composerWrap">
       <form id="composer" class="composer">
+        <button id="sourcesBtn" type="button" class="small"
+                title="Read other conversations and whole graphs alongside this thread's own document">⁂ Sources</button>
         <select id="task" title="Prefix your message with a preset instruction"></select>
         <textarea id="input" rows="1" placeholder="Ask about the document…  (Enter to send, Shift+Enter for newline)"></textarea>
         <button id="send" type="submit" class="primary" disabled>Send</button>
@@ -83,7 +85,7 @@
         <strong id="sheetTitle">Traces</strong>
         <div class="sheetActions">
           <label class="scopeLbl"><input type="checkbox" id="traceScope" checked /> this thread only</label>
-          <button id="closeSheet" class="small">Close</button>
+          <button id="closeSheet" class="small dismiss">Close</button>
         </div>
       </header>
       <div id="totals" class="totals"></div>
@@ -97,10 +99,27 @@
         <strong>Saved responses</strong>
         <div class="sheetActions">
           <button id="useSavedResponses" class="small primary" disabled>Use</button>
-          <button id="closeSavedSheet" class="small">Close</button>
+          <button id="closeSavedSheet" class="small dismiss">Close</button>
         </div>
       </header>
       <div id="savedList" class="traceList"></div>
+    </div>
+  </div>
+
+  <!-- Extra sources. A thread has always read its own document; this is where
+       other conversations and whole graphs are ticked to be read with it. -->
+  <div id="sourcesOverlay" class="overlay hidden">
+    <div class="sheet">
+      <header class="sheetTop">
+        <strong id="sourcesTitle">Extra sources</strong>
+        <div class="sheetActions">
+          <span id="sourcesCost" class="usage"></span>
+          <button id="previewSources" class="small" title="Exactly what the next question will be sent with">Preview</button>
+          <button id="saveSources" class="small primary">Save sources</button>
+          <button id="closeSourcesSheet" class="small dismiss">Close</button>
+        </div>
+      </header>
+      <div id="sourceList" class="sourceList"></div>
     </div>
   </div>
 
@@ -109,7 +128,7 @@
       <header class="sheetTop">
         <strong>Ground truth</strong>
         <div class="sheetActions">
-          <button id="closeGroundTruthSheet" class="small">Close</button>
+          <button id="closeGroundTruthSheet" class="small dismiss">Close</button>
         </div>
       </header>
       <div id="groundTruthList" class="diffList"></div>
@@ -124,7 +143,7 @@
           <span id="diffStat" class="diffStat"></span>
           <button id="versionsEdit" class="small" title="Open this version's text in the editor — saving files it as the newest version">✎ Edit text</button>
           <button id="backToPreview" class="small hidden" title="Return to the document preview you came from">← Back to preview</button>
-          <button id="closeVersionsSheet" class="small">Close</button>
+          <button id="closeVersionsSheet" class="small dismiss">Close</button>
         </div>
       </header>
       <div class="versionsBody">
@@ -184,8 +203,8 @@
           <span id="previewDirty" class="previewDirty hidden">unsaved</span>
           <button id="previewEdit" class="small" title="Correct this document's text — saved as a new version">✎ Edit text</button>
           <button id="previewSave" class="small primary hidden" title="Save the edited text as a new version">Save as new version</button>
-          <button id="previewCancel" class="small hidden" title="Discard the edit and go back to reading">Cancel</button>
-          <button id="closePreviewSheet" class="small">Close</button>
+          <button id="previewCancel" class="small hidden dismiss" title="Discard the edit and go back to reading">Cancel</button>
+          <button id="closePreviewSheet" class="small dismiss">Close</button>
         </div>
       </header>
       <div id="previewBody" class="previewBody"><div class="diffEmpty">loading…</div></div>
@@ -197,7 +216,7 @@
       <header class="sheetTop">
         <strong>Remove document</strong>
         <div class="sheetActions">
-          <button id="closeRemoveSheet" class="small">Close</button>
+          <button id="closeRemoveSheet" class="small dismiss">Close</button>
         </div>
       </header>
       <div class="confirmBody">
@@ -208,7 +227,7 @@
                autocomplete="off" autocapitalize="off" spellcheck="false" />
         <div id="removeError" class="confirmError"></div>
         <div class="confirmActions">
-          <button id="cancelRemove">Cancel</button>
+          <button id="cancelRemove" class="dismiss">Cancel</button>
           <button id="confirmRemove" class="destructive" disabled>Remove document</button>
         </div>
       </div>
@@ -222,14 +241,14 @@
       <header class="sheetTop">
         <strong id="promptTitle">Rename</strong>
         <div class="sheetActions">
-          <button id="closePromptSheet" class="small">Close</button>
+          <button id="closePromptSheet" class="small dismiss">Close</button>
         </div>
       </header>
       <div class="confirmBody">
         <label id="promptLbl" class="confirmLbl" for="promptInput">Name</label>
         <input id="promptInput" type="text" class="promptInput" autocomplete="off" spellcheck="false" />
         <div class="confirmActions">
-          <button id="cancelPrompt">Cancel</button>
+          <button id="cancelPrompt" class="dismiss">Cancel</button>
           <button id="confirmPrompt" class="primary">Save</button>
         </div>
       </div>
@@ -241,13 +260,13 @@
       <header class="sheetTop">
         <strong id="askTitle">Are you sure?</strong>
         <div class="sheetActions">
-          <button id="closeAskSheet" class="small">Close</button>
+          <button id="closeAskSheet" class="small dismiss">Close</button>
         </div>
       </header>
       <div class="confirmBody">
         <p id="askWhat" class="confirmWhat"></p>
         <div class="confirmActions">
-          <button id="cancelAsk">Cancel</button>
+          <button id="cancelAsk" class="dismiss">Cancel</button>
           <button id="confirmAsk" class="destructive">Delete</button>
         </div>
       </div>
@@ -259,7 +278,7 @@
       <header class="sheetTop">
         <strong>Remove version</strong>
         <div class="sheetActions">
-          <button id="closeVersionRemoveSheet" class="small">Close</button>
+          <button id="closeVersionRemoveSheet" class="small dismiss">Close</button>
         </div>
       </header>
       <div class="confirmBody">
@@ -270,7 +289,7 @@
                autocomplete="off" autocapitalize="off" spellcheck="false" />
         <div id="versionRemoveError" class="confirmError"></div>
         <div class="confirmActions">
-          <button id="cancelVersionRemove">Cancel</button>
+          <button id="cancelVersionRemove" class="dismiss">Cancel</button>
           <button id="confirmVersionRemove" class="destructive" disabled>Remove version</button>
         </div>
       </div>

@@ -11,6 +11,9 @@ const el = {
   totals: $('totals'), traceList: $('traceList'),
   savedResponses: $('savedResponses'), savedOverlay: $('savedOverlay'), savedList: $('savedList'),
   useSavedResponses: $('useSavedResponses'), closeSavedSheet: $('closeSavedSheet'),
+  sourcesBtn: $('sourcesBtn'), sourcesOverlay: $('sourcesOverlay'), sourcesTitle: $('sourcesTitle'),
+  sourceList: $('sourceList'), saveSources: $('saveSources'), previewSources: $('previewSources'),
+  closeSourcesSheet: $('closeSourcesSheet'), sourcesCost: $('sourcesCost'),
   groundTruthOverlay: $('groundTruthOverlay'), groundTruthList: $('groundTruthList'),
   closeGroundTruthSheet: $('closeGroundTruthSheet'),
   replaceDoc: $('replaceDoc'), replaceFile: $('replaceFile'), docVersions: $('docVersions'),
@@ -375,11 +378,13 @@ el.replaceFile.addEventListener('change', async () => {
     await refreshDocuments(doc.id);
     await refreshThreads();
 
-    if (updated.unchanged) {
-      el.docMeta.textContent += ' · identical to the current version, nothing changed';
+    if (updated.warnings?.length) el.docMeta.textContent += ` · ⚠ ${updated.warnings.join('; ')}`;
+    if (updated.identical) {
+      // The file was still taken — new bytes, maybe a new kind — so the version
+      // is real; there is just nothing to look at in the diff.
+      el.docMeta.textContent += ` · filed as v${updated.version}, text identical to the previous version`;
       return;
     }
-    if (updated.warnings?.length) el.docMeta.textContent += ` · ⚠ ${updated.warnings.join('; ')}`;
     // The point of replacing is seeing what moved, so go straight to the diff.
     openVersions(doc.id);
   } catch (err) {
@@ -846,7 +851,9 @@ el.previewSave.addEventListener('click', async () => {
     const doc = docCache.find((d) => d.id === docId);
     if (doc) await openPreview(doc);
 
-    if (saved.unchanged) return showSnackbar('Nothing changed — the text is identical.');
+    if (saved.identical) {
+      return showSnackbar(`Saved as v${saved.version} — the text is identical to the previous version.`);
+    }
     showSnackbar(`Saved as v${saved.version} · +${saved.additions} −${saved.deletions}`, 'success', {
       label: 'See the diff',
       onClick: () => openVersionsFromPreview(docId),
@@ -867,7 +874,7 @@ async function saveDocumentText(docId, text) {
   const saved = await jsonPost(`/api/documents/${docId}/text`, { text }, 'PUT');
   await refreshDocuments(docId);
   await refreshThreads();
-  if (!saved.unchanged) await versionFiled(docId);
+  await versionFiled(docId);
   return saved;
 }
 
@@ -946,7 +953,7 @@ function showRewritePopup(rect, passage, target) {
 
   const cancel = document.createElement('button');
   cancel.type = 'button';
-  cancel.className = 'small';
+  cancel.className = 'small dismiss';
   cancel.textContent = 'Cancel';
   cancel.addEventListener('click', hideRewritePopup);
 
@@ -1375,6 +1382,7 @@ async function openThread(id) {
   }
   scrollDown();
   await refreshThreads();
+  refreshSourceCount(thread.source_count ?? 0);
 }
 
 el.renameThread.addEventListener('click', async () => {
@@ -1411,6 +1419,7 @@ el.deleteThread.addEventListener('click', async () => {
   el.deleteThread.disabled = true;
   el.send.disabled = true;
   await refreshThreads();
+  await refreshSourceCount(0);
 });
 
 el.model.addEventListener('change', async () => {
@@ -1708,6 +1717,7 @@ function beginEdit(wrap, m) {
     });
   });
   save.classList.add('primary');
+  cancel.classList.add('dismiss');
 
   bar.append(save, cancel, model, note);
   box.append(ta, bar);
@@ -2108,4 +2118,154 @@ async function openGroundTruth(messageId) {
       ].filter(Boolean),
     })),
   });
+}
+
+/* --------------------------------------------------------------- extra sources
+
+   A thread reads its own document. This is where it is given more to read:
+   other conversations, and whole graphs, ticked from one list. The list belongs
+   to the thread, so a source attached here is still attached on the deck and on
+   the canvas — and it is assembled at send time, which means an answer added to
+   a source after it was attached is read by the very next question.
+   -------------------------------------------------------------------------- */
+
+el.sourcesBtn.addEventListener('click', openSources);
+el.closeSourcesSheet.addEventListener('click', () => el.sourcesOverlay.classList.add('hidden'));
+el.saveSources.addEventListener('click', saveSources);
+el.previewSources.addEventListener('click', previewSources);
+
+/** The count on the composer button, so the thread never reads something silently. */
+function refreshSourceCount(count) {
+  const n = currentThreadId ? Number(count) || 0 : 0;
+  el.sourcesBtn.textContent = n ? `⁂ Sources · ${n}` : '⁂ Sources';
+  el.sourcesBtn.classList.toggle('on', n > 0);
+}
+
+async function openSources() {
+  if (!currentThreadId) return showSnackbar('Open a thread first.', 'error');
+
+  el.sourcesOverlay.classList.remove('hidden');
+  el.sourceList.innerHTML = '<div class="d">loading…</div>';
+  el.sourcesTitle.textContent = 'Extra sources';
+  el.sourcesCost.textContent = '';
+
+  const [catalog, mine] = await Promise.all([
+    api(`/api/source-catalog?thread=${currentThreadId}`),
+    api(`/api/threads/${currentThreadId}/sources`),
+  ]);
+
+  const on = new Map(mine.items.map((i) => [`${i.kind}:${i.ref_id}`, i]));
+  // Attached first, in the order they are read; everything else after it. The
+  // list is long, and what this thread already reads is what you came to see.
+  const rank = (kind, id) => (on.has(`${kind}:${id}`) ? on.get(`${kind}:${id}`).position : Infinity);
+  const threads = [...catalog.threads].sort((a, b) => rank('thread', a.id) - rank('thread', b.id));
+  const graphs = [...catalog.graphs].sort((a, b) => rank('graph', a.id) - rank('graph', b.id));
+
+  const row = (kind, id, name, meta, extra = '') => {
+    const cur = on.get(`${kind}:${id}`);
+    return `
+      <label class="sourceRow${cur ? ' on' : ''}">
+        <input type="checkbox" class="sourceBox" data-kind="${kind}" data-id="${id}"${cur ? ' checked' : ''} />
+        <span class="sourceMain">
+          <span class="sourceName">${escapeHtml(name)}</span>
+          <span class="sourceMeta">${meta}</span>
+        </span>
+        ${extra}
+      </label>`;
+  };
+
+  const threadRows = threads.map((t) => row(
+    'thread', t.id, t.title,
+    `${t.messages} msg${t.filename ? ` · ${escapeHtml(t.filename)}` : ''} · ${fmtWhen(t.updated_at)}${
+      t.messages ? '' : ' · empty, contributes nothing'}`,
+    `<select class="sourceMode" data-id="${t.id}" title="How much of that conversation is read">
+       <option value="full"${on.get(`thread:${t.id}`)?.mode === 'last' ? '' : ' selected'}>Whole transcript</option>
+       <option value="last"${on.get(`thread:${t.id}`)?.mode === 'last' ? ' selected' : ''}>Final answer only</option>
+     </select>`,
+  )).join('');
+
+  const graphRows = graphs.map((g) => row(
+    'graph', g.id, g.title,
+    `${g.points} point${g.points === 1 ? '' : 's'} · ${g.lines} line${g.lines === 1 ? '' : 's'} · ${
+      g.books} book${g.books === 1 ? '' : 's'} · ${fmtWhen(g.updated_at)}${
+      g.points ? '' : ' · empty, contributes nothing'}`,
+  )).join('');
+
+  el.sourceList.innerHTML = `
+    <p class="sourceIntro">Tick anything this thread should read alongside its own document.
+       A conversation is read as its transcript, a graph as all of its points and the lines
+       between them. Nothing is copied — every question re-reads them as they are now.</p>
+    <h4 class="sourceHead">Conversations</h4>
+    ${threadRows || '<div class="d">No other conversations yet.</div>'}
+    <h4 class="sourceHead">Graphs</h4>
+    ${graphRows || '<div class="d">No graphs yet — build one in the Grimoire.</div>'}`;
+
+  // Clicking the mode picker must not toggle the row it sits in.
+  el.sourceList.querySelectorAll('.sourceMode').forEach((sel) =>
+    sel.addEventListener('click', (e) => e.preventDefault()));
+  el.sourceList.querySelectorAll('.sourceBox').forEach((box) =>
+    box.addEventListener('change', () => {
+      box.closest('.sourceRow').classList.toggle('on', box.checked);
+      showSourceCost(null);
+    }));
+
+  showSourceCost(mine.summary);
+  refreshSourceCount(mine.items.length);
+  // Back from the preview, which replaced this list with the assembled text.
+  el.saveSources.disabled = false;
+  el.previewSources.textContent = 'Preview';
+}
+
+/** What the attached set costs, from the server — blanked while it is stale. */
+function showSourceCost(summary) {
+  const ticked = el.sourceList.querySelectorAll('.sourceBox:checked').length;
+  el.sourcesTitle.textContent = `Extra sources · ${ticked} selected`;
+  el.sourcesCost.textContent = summary
+    ? (summary.chars ? `${summary.chars.toLocaleString()} chars sent with every question` : '')
+    : 'unsaved — press Save sources';
+}
+
+function tickedSources() {
+  return [...el.sourceList.querySelectorAll('.sourceBox:checked')].map((box) => {
+    const kind = box.dataset.kind;
+    const id = Number(box.dataset.id);
+    const mode = kind === 'thread'
+      ? el.sourceList.querySelector(`.sourceMode[data-id="${id}"]`)?.value ?? 'full'
+      : 'full';
+    return { kind, id, mode };
+  });
+}
+
+async function saveSources() {
+  if (!currentThreadId) return;
+  const items = tickedSources();
+  try {
+    const saved = await jsonPost(`/api/threads/${currentThreadId}/sources`, { items }, 'PUT');
+    const { summary } = await api(`/api/threads/${currentThreadId}/sources`);
+    showSourceCost(summary);
+    refreshSourceCount(saved.items.length);
+    showSnackbar(saved.items.length
+      ? `${saved.items.length} source${saved.items.length === 1 ? '' : 's'} attached — every question in this thread reads them`
+      : 'Sources cleared — this thread reads only its own document');
+  } catch (err) {
+    showSnackbar(err.message, 'error');
+  }
+}
+
+async function previewSources() {
+  if (!currentThreadId) return;
+  // The preview replaces the tick list, so Save would have nothing to read and
+  // would file an empty set. It goes out until the list comes back.
+  if (el.saveSources.disabled) return openSources();
+
+  const { preview, summary } = await api(`/api/threads/${currentThreadId}/sources`);
+  if (!summary.chars) return showSnackbar('Nothing attached yet — tick something and save.', 'error');
+
+  el.saveSources.disabled = true;
+  el.previewSources.textContent = 'Back to the list';
+  el.sourceList.innerHTML = `
+    <p class="sourceIntro">The first 4,000 characters of exactly what the next question in this
+       thread is sent with, assembled from ${summary.parts.length} source${summary.parts.length === 1 ? '' : 's'}
+       in reading order. Press <b>Back to the list</b> to change what goes in.</p>
+    <pre class="sourcePreview">${escapeHtml(preview)}${summary.chars > 4000 ? '\n\n…' : ''}</pre>`;
 }

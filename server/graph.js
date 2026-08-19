@@ -25,90 +25,15 @@ import { fileURLToPath } from 'node:url';
 
 import * as db from './db.js';
 import * as llm from './llm.js';
+import {
+  documentPart, threadPart, attachedParts, wrapParts, sourceSummary,
+} from './sources.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-
-// A parent conversation can grow without limit, and pasting all of it into
-// every descendant is how a graph three levels deep stops fitting anywhere. So
-// a thread source contributes its tail: the most recent turns, whole, up to
-// this many characters. Books are not capped here — the context budget and the
-// map-reduce split already handle those.
-const THREAD_SOURCE_CHARS = Number(process.env.GRAPH_THREAD_SOURCE_CHARS || 60_000);
 
 const asyncRoute = (fn) => (req, res, next) => Promise.resolve(fn(req, res, next)).catch(next);
 
 /* ------------------------------------------------------------------ sources */
-
-/** The text a document node contributes, at whatever version it is pinned to. */
-function documentSource(node) {
-  const doc = db.getDocument(node.document_id);
-  if (!doc) return null;
-
-  if (node.doc_version != null) {
-    const v = db.getDocumentVersion(doc.id, node.doc_version);
-    if (v) {
-      return {
-        kind: 'document',
-        name: v.filename || doc.filename,
-        version: v.version,
-        text: v.text,
-      };
-    }
-  }
-  const newest = db.listDocumentVersions(doc.id)[0];
-  return {
-    kind: 'document',
-    name: doc.filename,
-    version: newest?.version ?? 1,
-    text: doc.text,
-  };
-}
-
-/**
- * The text a conversation node contributes.
- *
- * `last` is the mode that makes branching cheap: when the parent's job was to
- * produce a draft chapter, the child needs that chapter and nothing else — not
- * the six turns of argument that led to it.
- */
-function threadSource(node, mode) {
-  const thread = db.getThread(node.thread_id);
-  if (!thread) return null;
-  const messages = db.getMessages(node.thread_id);
-  if (!messages.length) return null;
-
-  const name = node.label || thread.title || `Thread ${node.thread_id}`;
-
-  if (mode === 'last') {
-    const answer = [...messages].reverse().find((m) => m.role === 'assistant' && !m.error);
-    if (!answer) return null;
-    return { kind: 'thread', name, detail: 'final answer', text: answer.content };
-  }
-
-  // Whole transcript, tail-first truncation: turns are dropped from the top, so
-  // what survives is always the most recent — and always whole turns, never a
-  // sentence cut in half.
-  const rendered = messages
-    .filter((m) => m.content?.trim())
-    .map((m) => `${m.role === 'user' ? 'Q' : 'A'}: ${m.content.trim()}`);
-
-  const kept = [];
-  let size = 0;
-  for (let i = rendered.length - 1; i >= 0; i--) {
-    size += rendered[i].length + 2;
-    if (size > THREAD_SOURCE_CHARS && kept.length) break;
-    kept.unshift(rendered[i]);
-  }
-
-  return {
-    kind: 'thread',
-    name,
-    detail: kept.length < rendered.length
-      ? `last ${kept.length} of ${rendered.length} messages`
-      : `${rendered.length} messages`,
-    text: kept.join('\n\n'),
-  };
-}
 
 /**
  * Everything upstream of a node, in reading order, as one body of text.
@@ -126,61 +51,39 @@ export function assembleSource(nodeId) {
   const ids = db.ancestorIds(nodeId);
 
   const parts = [];
+  const walked = new Set();
   for (const id of ids) {
     const node = db.getGraphNode(id);
     if (!node) continue;
     const mode = direct.get(id) ?? 'full';
     if (mode === 'none') continue;
 
-    const src = node.kind === 'document' ? documentSource(node) : threadSource(node, mode);
-    if (src?.text?.trim()) parts.push({ ...src, nodeId: id });
+    const src = node.kind === 'document'
+      ? documentPart({ documentId: node.document_id, version: node.doc_version })
+      : threadPart({ threadId: node.thread_id, mode, label: node.label });
+    if (src?.text?.trim()) {
+      parts.push({ ...src, nodeId: id });
+      walked.add(node.kind === 'document' ? `document:${node.document_id}` : `thread:${node.thread_id}`);
+    }
   }
 
-  if (!parts.length) return { text: '', filename: null, parts: [] };
-
-  const body = parts
-    .map((p) => {
-      const attrs = [
-        `kind="${p.kind}"`,
-        `name="${String(p.name).replace(/"/g, "'")}"`,
-        p.version != null ? `version="${p.version}"` : null,
-        p.detail ? `scope="${p.detail}"` : null,
-      ].filter(Boolean).join(' ');
-      return `<source ${attrs}>\n${p.text}\n</source>`;
-    })
-    .join('\n\n');
-
-  // One source and it is a book: hand it over as that book, unwrapped. The
-  // wrapper earns its place only when there is more than one thing to tell
-  // apart, and an unwrapped book is what every existing prompt expects.
-  if (parts.length === 1 && parts[0].kind === 'document') {
-    return {
-      text: parts[0].text,
-      filename: parts[0].version != null ? `${parts[0].name} (v${parts[0].version})` : parts[0].name,
-      parts,
-    };
+  // Then whatever was attached to this conversation by hand. A line on the
+  // canvas and a source picked from the list are the same promise — "answer me
+  // from this too" — so they arrive in the same body of text, the drawn ones
+  // first because they are what the point was opened from.
+  //
+  // Anything already carried in by a line is dropped here rather than sent
+  // twice: the two routes can name the same conversation — one drawn on this
+  // canvas, one attached before the line existed — and paying for that
+  // transcript twice is the whole cost of the turn for nothing.
+  const self = db.getGraphNode(nodeId);
+  if (self?.thread_id) {
+    parts.push(...attachedParts(self.thread_id)
+      .filter((p) => !(p.refKind === 'thread' && walked.has(`thread:${p.refId}`))));
   }
 
-  const header = `This conversation was opened from ${parts.length} source${parts.length > 1 ? 's' : ''}, `
-    + 'given below in the order they should be read. Treat all of them as the material '
-    + 'under discussion.\n\n';
-
-  return {
-    text: header + body,
-    filename: parts.map((p) => (p.version != null ? `${p.name} v${p.version}` : p.name)).join(' + '),
-    parts,
-  };
+  return wrapParts(parts);
 }
-
-/** What a source assembly costs, without paying to build the text twice. */
-const sourceSummary = (src) => ({
-  chars: src.text.length,
-  filename: src.filename,
-  parts: src.parts.map((p) => ({
-    nodeId: p.nodeId, kind: p.kind, name: p.name,
-    version: p.version ?? null, detail: p.detail ?? null, chars: p.text.length,
-  })),
-});
 
 /**
  * Somewhere to put an auto-placed point: one column right of its parent, and
@@ -480,12 +383,45 @@ export function mountGraph(app, { streamTurn }) {
     res.json({ graph, nodes: db.listGraphNodes(id), edges: db.listGraphEdges(id) });
   });
 
-  /** Everything a picker can seed a point from. Text and blobs excluded. */
+  /**
+   * Everything a picker can seed a point from. Text and blobs excluded, and
+   * every row carries the graphs it already stands on: placing a conversation
+   * that is already the root of another graph is a legitimate thing to do — the
+   * point is a pointer, not a copy — but it should be a decision, not a
+   * surprise found later.
+   */
   app.get('/api/graph-library', (_req, res) => {
-    res.json({
-      documents: db.listDocuments().map(({ text, data, ...rest }) => rest),
-      threads: db.listThreads(),
-    });
+    const documents = db.listDocuments().map(({ text, data, ...rest }) => ({
+      ...rest,
+      graphs: db.graphsUsing({ documentId: rest.id }),
+    }));
+    const threads = db.listThreads().map((t) => ({
+      ...t,
+      graphs: db.graphsUsing({ threadId: t.id }),
+    }));
+    res.json({ documents, threads });
+  });
+
+  /**
+   * The shelf rather than one canvas: every graph, what each stands on, and
+   * what any two of them share. This is the view that cannot be had from inside
+   * a graph — where a book is reused across four lines of work, which graphs
+   * are entangled, and which stand alone.
+   */
+  app.get('/api/graph-atlas', (_req, res) => res.json(db.graphAtlas()));
+
+  /**
+   * Where else this exact book or conversation stands. Asked per point by the
+   * inspector, so travelling from one canvas to another that reads the same
+   * thing is one click rather than a hunt through the picker.
+   */
+  app.get('/api/graph-usage', (req, res) => {
+    const documentId = req.query.document != null ? Number(req.query.document) : null;
+    const threadId = req.query.thread != null ? Number(req.query.thread) : null;
+    if (documentId == null && threadId == null) {
+      return res.status(400).json({ error: 'document or thread is required.' });
+    }
+    res.json({ graphs: db.graphsUsing({ documentId, threadId }) });
   });
 
   /* -------------------------------------------------------------- points */
@@ -635,7 +571,14 @@ export function mountGraph(app, { streamTurn }) {
       return res.status(404).json({ error: 'No such point.' });
     }
     const src = assembleSource(node.id);
-    res.json({ ...sourceSummary(src), preview: src.text.slice(0, 4000) });
+    // The attached list goes back whole, not only the parts that made it into
+    // the text: a source that is empty, or already carried in by a line, is
+    // still attached — and the panel that offers to detach it has to show it.
+    res.json({
+      ...sourceSummary(src),
+      attached: node.thread_id ? db.listThreadSources(node.thread_id) : [],
+      preview: src.text.slice(0, 4000),
+    });
   });
 
   /** The conversation on a point, plus the lines feeding it. */
