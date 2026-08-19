@@ -161,6 +161,11 @@ for (const [table, column, type] of [
   ['traces', 'finish_reason', 'TEXT'],
   ['documents', 'data', 'BLOB'],
   ['document_versions', 'source_message_id', 'INTEGER'],
+  ['document_versions', 'restored_from', 'INTEGER'],
+  // Where the conversation is treated as beginning. Everything above this
+  // message stays in the transcript and stays readable — it just stops being
+  // sent to the model. NULL means the whole conversation is sent.
+  ['threads', 'context_from_message_id', 'INTEGER'],
 ]) {
   const cols = db.prepare(`PRAGMA table_info(${table})`).all().map((c) => c.name);
   if (!cols.includes(column)) db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${type}`);
@@ -273,12 +278,12 @@ export function replaceDocumentContent(id, { kind, text, words, pages, bytes, da
 function insertVersion(documentId, version, v, stat) {
   db.prepare(
     `INSERT INTO document_versions
-       (document_id, version, filename, kind, text, chars, words, pages, bytes, sha256, additions, deletions)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       (document_id, version, filename, kind, text, chars, words, pages, bytes, sha256, additions, deletions, restored_from)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   ).run(
     documentId, version, v.filename, v.kind ?? null, v.text, v.text.length,
     v.words ?? null, v.pages ?? null, v.bytes ?? null, v.sha256,
-    stat?.additions ?? null, stat?.deletions ?? null,
+    stat?.additions ?? null, stat?.deletions ?? null, v.restoredFrom ?? null,
   );
 }
 
@@ -341,6 +346,67 @@ export function editDocumentText(id, { text }) {
 }
 
 /**
+ * Make an older version the document's live content again.
+ *
+ * The rail is a record, not a stack: nothing is rewound and nothing is dropped.
+ * The chosen version's text is written to `documents.text` and filed forward as
+ * the next version, whose `restored_from` says where it came from. So "go back
+ * to v3" leaves v4 and v5 exactly where they are, and the way back from a
+ * restore is another restore.
+ *
+ * Only the text moves. `kind`, `pages` and the stored bytes describe the file
+ * that is actually on disk in `documents.data`, and versions do not carry
+ * blobs — restoring v3's text does not put v3's PDF back, and claiming
+ * otherwise by copying its page count would be a lie the export would expose.
+ *
+ * Returns null when there is no such version. `identical` reports a restore of
+ * text the document already holds — still a filed version, like every other
+ * save, because the rail records what was done as well as what came out
+ * different.
+ */
+export function restoreDocumentVersion(documentId, version) {
+  const current = getDocument(documentId);
+  if (!current) return null;
+
+  const row = getDocumentVersion(documentId, version);
+  // A document stored before versioning existed has no rows; its live text is
+  // the version 1 the rail shows, and restoring that is a no-op worth allowing
+  // rather than a 404 about a version the user can see listed.
+  const text = row ? row.text : (version === 1 ? current.text : null);
+  if (text == null) return null;
+
+  const sha256 = crypto.createHash('sha256').update(text).digest('hex');
+  const identical = sha256 === current.sha256;
+
+  let stat;
+  const next = inTransaction(() => {
+    ensureInitialVersion(documentId, current);
+
+    const words = text.split(/\s+/).filter(Boolean).length;
+    db.prepare('UPDATE documents SET text = ?, chars = ?, words = ?, sha256 = ? WHERE id = ?')
+      .run(text, text.length, words, sha256, documentId);
+
+    const n = latestVersionNumber(documentId) + 1;
+    stat = diffStat(current.text, text);
+    insertVersion(
+      documentId,
+      n,
+      {
+        filename: current.filename, kind: current.kind, text, words,
+        pages: current.pages, bytes: current.bytes, sha256, restoredFrom: version,
+      },
+      stat,
+    );
+    return n;
+  });
+
+  return {
+    doc: getDocument(documentId), version: next, restoredFrom: version,
+    identical, additions: stat.additions, deletions: stat.deletions,
+  };
+}
+
+/**
  * File a model's rewritten text as the next version of a document, without
  * touching the stored document itself. The model's answer is a candidate
  * revision, not the new source of truth — the user reviews it in the diff
@@ -380,7 +446,7 @@ export function listDocumentVersions(documentId) {
   return db
     .prepare(
       `SELECT id, document_id, version, filename, kind, chars, words, pages, bytes,
-              sha256, additions, deletions, source_message_id, created_at
+              sha256, additions, deletions, source_message_id, restored_from, created_at
          FROM document_versions WHERE document_id = ? ORDER BY version DESC`,
     )
     .all(documentId);
@@ -470,7 +536,8 @@ export function listThreads(limit = 200) {
   return db
     .prepare(
       `SELECT t.id, t.title, t.model, t.created_at, t.updated_at,
-              t.document_id, d.filename, d.chars AS doc_chars, d.pages AS doc_pages,
+              t.document_id, t.context_from_message_id,
+              d.filename, d.chars AS doc_chars, d.pages AS doc_pages,
               (SELECT COUNT(*) FROM messages m WHERE m.thread_id = t.id) AS message_count,
               (SELECT m.content FROM messages m
                 WHERE m.thread_id = t.id AND m.role = 'user'
@@ -528,6 +595,43 @@ export function getMessages(threadId) {
          FROM messages m WHERE m.thread_id = ? ORDER BY m.id ASC`,
     )
     .all(threadId);
+}
+
+/**
+ * The part of a conversation the model is actually shown.
+ *
+ * A long record drifts: the first twenty turns settle a chapter, then the work
+ * moves on, and every later question still pays for the settled part in tokens
+ * and in the model's attention. Marking a message as the start cuts that off
+ * without deleting anything — the transcript keeps its whole history, and only
+ * the prompt gets shorter.
+ *
+ * The cut is stored on the thread, so it applies wherever the conversation is
+ * read: its own turns, and the transcript other records and graphs read it as.
+ */
+export function contextStartIndex(threadId, messages) {
+  const thread = db.prepare('SELECT context_from_message_id FROM threads WHERE id = ?').get(threadId);
+  const from = thread?.context_from_message_id;
+  if (from == null) return 0;
+
+  const at = messages.findIndex((m) => m.id === from);
+  // A cut whose message was deleted is a cut pointing at nothing. Sending the
+  // whole conversation is the safe reading of that — it can only ever be too
+  // much context, never too little.
+  return at === -1 ? 0 : at;
+}
+
+/** The whole conversation as the model sees it. */
+export function contextMessages(threadId) {
+  const all = getMessages(threadId);
+  return all.slice(contextStartIndex(threadId, all));
+}
+
+/** Move, or clear, where a conversation is treated as beginning. */
+export function setThreadContextStart(id, messageId) {
+  db.prepare('UPDATE threads SET context_from_message_id = ?, updated_at = datetime(\'now\') WHERE id = ?')
+    .run(messageId ?? null, id);
+  return getThread(id);
 }
 
 export function getMessage(id) {
@@ -627,6 +731,10 @@ export function deleteMessage(id) {
   const row = db.prepare('SELECT thread_id FROM messages WHERE id = ?').get(id);
   if (!row) return false;
   db.prepare('DELETE FROM messages WHERE id = ?').run(id);
+  // A start marker on the message being deleted would point at nothing. The
+  // reading falls back to "send everything" either way; clearing it makes the
+  // stored state say so too, so no UI has to render a mark that is not there.
+  db.prepare('UPDATE threads SET context_from_message_id = NULL WHERE context_from_message_id = ?').run(id);
   db.prepare("UPDATE threads SET updated_at = datetime('now') WHERE id = ?").run(row.thread_id);
   return true;
 }
@@ -684,6 +792,11 @@ export function editMessage(id, content) {
  */
 export function deleteMessagesAfter(threadId, id) {
   const n = db.prepare('DELETE FROM messages WHERE thread_id = ? AND id > ?').run(threadId, id).changes;
+  // Same reason as deleteMessage: a mark that pointed into the discarded tail
+  // is gone with it.
+  db.prepare(
+    'UPDATE threads SET context_from_message_id = NULL WHERE id = ? AND context_from_message_id > ?',
+  ).run(threadId, id);
   db.prepare("UPDATE threads SET updated_at = datetime('now') WHERE id = ?").run(threadId);
   return n;
 }

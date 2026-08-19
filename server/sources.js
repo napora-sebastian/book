@@ -73,7 +73,10 @@ export function renderTranscript(messages, limit = THREAD_SOURCE_CHARS) {
 export function threadPart({ threadId, mode = 'full', label = null }) {
   const thread = db.getThread(threadId);
   if (!thread) return null;
-  const messages = db.getMessages(threadId);
+  // A conversation that was told where it starts starts there for everyone.
+  // The marker says "the work before this is settled" — it would be strange
+  // for the record itself to skip it while every reader of it did not.
+  const messages = db.contextMessages(threadId);
   if (!messages.length) return null;
 
   const name = label || thread.title || `Thread ${threadId}`;

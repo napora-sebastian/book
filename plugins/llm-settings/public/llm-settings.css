@@ -221,3 +221,36 @@ select.llmset-input { cursor: pointer; }
   border-color: transparent;
   color: var(--accentFg, #fff);
 }
+
+
+/* ---------------------------------------------------------------- phone
+
+   The sheet is a card centred in 4vh/4vw of padding, which on a phone is a full
+   screen with a hairline drawn round it — so it becomes one honestly, and the
+   two-column rows inside it stack. Written here rather than in a host's
+   stylesheet because this file loads last: a host rule of the same specificity
+   would lose to the desktop rules above it.
+   ------------------------------------------------------------------------- */
+
+@media (max-width: 720px) {
+  .llmset-overlay { padding: 0; align-items: stretch; }
+  .llmset-sheet {
+    width: 100%; max-height: none; height: 100%;
+    border: 0; border-radius: 0;
+  }
+  .llmset-head { flex-wrap: wrap; padding: 12px; }
+  .llmset-headActions { margin-left: 0; flex: 1 0 100%; }
+  .llmset-headActions button { flex: 1; }
+  .llmset-body { padding: 12px; }
+  .llmset-discard { flex-wrap: wrap; padding: 10px 12px; }
+  .llmset-card { padding: 12px; }
+  /* The model field and the button that probes it are one control on a wide
+     screen and two lines on a narrow one. */
+  .llmset-modelRow { flex-wrap: wrap; }
+  .llmset-modelRow .llmset-input { flex: 1 1 100%; }
+  /* Badge and the four reordering icons stay on one line, and the name field
+     drops below them — six controls on a 390px row would leave the name about
+     four characters wide. */
+  .llmset-cardHead { flex-wrap: wrap; }
+  .llmset-label { flex: 1 0 100%; order: 1; }
+}

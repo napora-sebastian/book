@@ -126,3 +126,10 @@ body {
    the corner frame. Everything the canvas draws is inside it. */
 
 #constellation { position: fixed; inset: 0; z-index: 10; }
+
+/* The corner brackets sit 10px off every edge; the canvas chrome moves to 8px
+   on a phone, so the frame would be drawn straight through the bar. It is the
+   one thing on this page that carries no information. */
+@media (max-width: 720px) {
+  .frame { display: none; }
+}

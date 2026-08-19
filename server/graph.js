@@ -28,6 +28,7 @@ import * as llm from './llm.js';
 import {
   documentPart, threadPart, attachedParts, wrapParts, sourceSummary,
 } from './sources.js';
+import { graphTitlePrompt, suggestTitle } from './naming.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -363,6 +364,22 @@ export function mountGraph(app, { streamTurn }) {
     res.json(g);
   });
 
+  /**
+   * What this graph could be called, read from the points standing on it.
+   * A suggestion only — PATCH above is still what writes a name, and only
+   * once the user has kept it.
+   */
+  app.post('/api/graphs/:id/suggest-title', asyncRoute(async (req, res) => {
+    const built = graphTitlePrompt(Number(req.params.id));
+    if (!built) return res.status(404).json({ error: 'No such graph.' });
+    try {
+      const out = await suggestTitle(built.messages, { model: req.body?.model });
+      res.json({ title: out.title, model: out.model, current: built.subject.title });
+    } catch (err) {
+      res.status(502).json({ error: err.message });
+    }
+  }));
+
   app.delete('/api/graphs/:id', (req, res) => {
     // Points go with the graph; the threads and books they pointed at do not.
     if (!db.deleteGraph(Number(req.params.id))) {
@@ -640,7 +657,10 @@ export function mountGraph(app, { streamTurn }) {
     const chosenModel = model || thread.model || llm.config().model;
     if (model && model !== thread.model) db.setThreadModel(threadId, model);
 
-    const history = db.getMessages(threadId).map((m) => ({ role: m.role, content: m.content }));
+    // Honours the point's own start marker, the same as a turn sent from the
+    // deck: the graph supplies the upstream sources, the thread supplies as
+    // much of itself as the user left switched on.
+    const history = db.contextMessages(threadId).map((m) => ({ role: m.role, content: m.content }));
     const userMsg = db.addMessage({ threadId, role: 'user', content: question, task: taskId });
 
     if (history.length === 0 && (!thread.title || /^(New thread|New branch)$/.test(thread.title))) {
@@ -699,7 +719,8 @@ export function mountGraph(app, { streamTurn }) {
     await streamTurn(res, {
       threadId,
       userMsg,
-      history: messages.slice(0, userIdx).map((m) => ({ role: m.role, content: m.content })),
+      history: messages.slice(db.contextStartIndex(threadId, messages), userIdx)
+        .map((m) => ({ role: m.role, content: m.content })),
       taskId: userMsg.task || 'chat',
       chosenModel,
       source: source.parts.length ? { text: source.text, filename: source.filename } : null,

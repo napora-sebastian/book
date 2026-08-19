@@ -105,6 +105,7 @@ const MARKUP = `
         <h2 data-el="inspTitle">—</h2>
         <p class="inspSub" data-el="inspSub">—</p>
       </div>
+      <button data-el="inspRename" class="hudBtn hidden" title="Rename this conversation everywhere it is read">✎</button>
       <button data-el="inspUsage" class="hudBtn hidden" title="Also on other graphs — see where">⁂</button>
       <button data-el="inspRead" class="hudBtn hidden" title="Read this conversation in the deck behind">▤ IN DECK</button>
       <button data-el="inspBranch" class="hudBtn" title="Open a new conversation from this point">⑂ BRANCH</button>
@@ -158,6 +159,9 @@ const MARKUP = `
         <p data-el="modalErr" class="modalErr"></p>
       </div>
       <footer class="modalActs">
+        <button data-el="modalSuggest" class="hudBtn hidden"
+                title="Let the model read this and propose a name — nothing is written until you keep it">✦ SUGGEST</button>
+        <span class="modalSpacer"></span>
         <button data-el="modalCancel" class="hudBtn quit">CANCEL</button>
         <button data-el="modalOk" class="hudBtn primary">CONFIRM</button>
       </footer>
@@ -287,11 +291,67 @@ function zoomAt(clientX, clientY, factor) {
   renderReadout();
 }
 
+/**
+ * The part of the canvas a point can actually be seen in.
+ *
+ * On a wide screen the inspector takes width away from the canvas element
+ * itself — `.inspecting .canvas` is inset by --inspW — so the element's own box
+ * is already the truth. On a phone the inspector is a bottom sheet lying *over*
+ * the canvas, and the element's box is a lie: two thirds of it is behind the
+ * sheet. Framing a graph into that box parks it under the sheet, which is what
+ * "the canvas is empty" looked like — the points were drawn, just not anywhere
+ * the screen was showing.
+ *
+ * Measured from the two elements rather than from a breakpoint, so it stays
+ * right in the mixed console, where the pane the canvas sits in is not the
+ * viewport and the inspector is positioned against the pane.
+ */
+function viewBox() {
+  const r = el.canvas.getBoundingClientRect();
+  const box = { width: r.width, height: r.height };
+  if (el.inspector.classList.contains('hidden')) return box;
+
+  const i = el.inspector.getBoundingClientRect();
+  const overW = Math.min(r.right, i.right) - Math.max(r.left, i.left);
+  const overH = Math.min(r.bottom, i.bottom) - Math.max(r.top, i.top);
+  if (overW <= 0 || overH <= 0) return box;
+
+  // Whichever edge it spans is the edge it eats: a full-width sheet takes
+  // height, a column down one side takes width.
+  if (overW >= r.width - 1) box.height = Math.max(80, box.height - overH);
+  else box.width = Math.max(80, box.width - overW);
+  return box;
+}
+
+/**
+ * Bring a point into the part of the canvas that is on screen, if it is not
+ * already there. Raising the inspector is the case this exists for: on a phone
+ * the sheet comes up over the bottom two thirds, and the card you just tapped
+ * is very often under it.
+ */
+function ensureVisible(nodeId) {
+  const n = byNode.get(nodeId);
+  if (!n) return;
+  const v = viewBox();
+  const h = (sizes.get(nodeId) ?? 180) * cam.z;
+  const x = cam.x + n.x * cam.z;
+  const y = cam.y + n.y * cam.z;
+  const fits = x >= -8 && y >= -8
+    && x + NODE_W * cam.z <= v.width + 8
+    && y + h <= v.height + 8;
+  if (!fits) centreOn(nodeId);
+}
+
 /** Frame everything on the canvas, with room to breathe. */
 function fitAll() {
   if (!nodes.length) { cam.x = 0; cam.y = 0; cam.z = 1; return applyCam(); }
 
-  const pad = 90;
+  const r = viewBox();
+  // A flat 90px is a tenth of a desktop canvas and more than half of a phone's,
+  // where it squeezed the whole graph into a strip down the middle. Scaled to
+  // the canvas it is breathing room on both.
+  const pad = Math.max(16, Math.min(90, Math.min(r.width, r.height) * 0.09));
+
   const xs = nodes.map((n) => n.x);
   const ys = nodes.map((n) => n.y);
   const minX = Math.min(...xs);
@@ -299,7 +359,6 @@ function fitAll() {
   const maxX = Math.max(...nodes.map((n) => n.x + NODE_W));
   const maxY = Math.max(...nodes.map((n) => n.y + (sizes.get(n.id) ?? 180)));
 
-  const r = el.canvas.getBoundingClientRect();
   const z = Math.min(Z_MAX, Math.max(Z_MIN,
     Math.min((r.width - pad * 2) / Math.max(1, maxX - minX), (r.height - pad * 2) / Math.max(1, maxY - minY))));
 
@@ -454,7 +513,8 @@ function cardHtml(n) {
       ${isDoc
         ? '<button class="nodeAct" data-act="branch">⑂ ASK THIS BOOK</button>'
         : '<button class="nodeAct" data-act="open">▸ OPEN</button>'
-          + '<button class="nodeAct" data-act="branch">⑂ BRANCH</button>'}
+          + '<button class="nodeAct" data-act="branch">⑂ BRANCH</button>'
+          + '<button class="nodeAct" data-act="rename" title="Rename this conversation">✎</button>'}
       <span class="spacer"></span>
       ${elsewhere ? `<button class="nodeAct shared" data-act="usage"
           title="Also on ${elsewhere} other graph${elsewhere === 1 ? '' : 's'} — the same ${isDoc ? 'book' : 'conversation'}, not a copy">⁂${elsewhere}</button>` : ''}
@@ -640,6 +700,41 @@ el.canvas.addEventListener('wheel', (ev) => {
   }
 }, { passive: false });
 
+/* Two fingers on the canvas pinch it, the same gesture the trackpad sends as a
+   ctrl-wheel. Pointer events already give one finger the pan — they do not give
+   a second one anything, and `touch-action: none` on the canvas means the
+   browser will not zoom the page for us either. So the pair is handled here and
+   the single finger is left to the pan above.
+
+   The pinch takes over from the pan mid-gesture: the first finger down opened a
+   pan, and continuing to feed it while the second finger scales would drag the
+   camera by whichever finger the browser calls first. */
+let pinch = null;
+const spanOf = (t) => Math.hypot(t[0].clientX - t[1].clientX, t[0].clientY - t[1].clientY);
+const midOf = (t) => ({ x: (t[0].clientX + t[1].clientX) / 2, y: (t[0].clientY + t[1].clientY) / 2 });
+
+el.canvas.addEventListener('touchstart', (ev) => {
+  if (ev.touches.length < 2) return;
+  if (ev.target.closest('.node, .wireHit')) return;
+  endPan();
+  pinch = { span: spanOf(ev.touches) };
+}, { passive: true });
+
+el.canvas.addEventListener('touchmove', (ev) => {
+  if (!pinch || ev.touches.length < 2) return;
+  ev.preventDefault();
+  const span = spanOf(ev.touches);
+  const mid = midOf(ev.touches);
+  // Ratio against the last frame, not against the start: zoomAt already
+  // compounds, and anchoring to the start would fight it.
+  zoomAt(mid.x, mid.y, span / pinch.span);
+  pinch.span = span;
+}, { passive: false });
+
+const endPinch = (ev) => { if (ev.touches.length < 2) pinch = null; };
+el.canvas.addEventListener('touchend', endPinch);
+el.canvas.addEventListener('touchcancel', endPinch);
+
 /* ------------------------------------------------------------ moving cards */
 
 let drag = null;
@@ -782,6 +877,8 @@ el.points.addEventListener('click', async (ev) => {
 
   if (act === 'open') return void openPoint(id);
 
+  if (act === 'rename') return void renamePoint(id);
+
   if (act === 'branch') {
     try {
       const made = await post(`/api/graphs/${graphId}/nodes/${id}/branch`, { mode: 'full' });
@@ -907,9 +1004,16 @@ async function openPoint(id) {
   el.inspector.classList.remove('hidden');
   renderNodes();
   renderWires();
+  // The inspector is up now, so what is on screen has just changed. On a phone
+  // it is a bottom sheet over the canvas and the point that was just opened is
+  // usually behind it.
+  ensureVisible(id);
 
   el.inspGlyph.textContent = glyphOf(n);
   el.inspTitle.textContent = titleOf(n);
+  // A book is renamed where it is stored, in the deck; a conversation is
+  // renamed here, because this is where you find out what it turned into.
+  el.inspRename.classList.toggle('hidden', n.kind !== 'thread');
 
   // Standing on other canvases is a property of the point worth carrying in the
   // header: everything below this line writes to something they are all reading.
@@ -1211,9 +1315,48 @@ async function readDocument({ documentId, filename, version, newest }) {
       body: `<div class="srcPreview">${esc(text)}</div>`,
       acts: [
         { label: '✎ EDIT TEXT', run: () => openDocEditor({ documentId, filename, seedVersion: version, newest }) },
+        // Only worth offering while an older draft is on screen: making the
+        // newest version current is a button that does nothing you can see.
+        ...(version != null && newest != null && version !== newest
+          ? [{ label: '⤒ MAKE CURRENT', tone: 'go', run: () => restoreVersion({ documentId, filename, version, newest }) }]
+          : []),
         { label: '⇄ REPLACE FILE', run: () => { closeSheet(); replaceDocumentSource({ documentId, filename }); } },
       ],
     });
+  } catch (err) { toast(err.message, 'err'); }
+}
+
+/**
+ * Put an older draft back as the book's text, from the sheet that is reading it.
+ *
+ * Nothing is rewound. The chosen draft is filed forward as the newest version,
+ * so the drafts made after it stay on the rail — and a point pinned to a version
+ * keeps its pin, because what a point reads is its own decision, not a side
+ * effect of somebody else restoring a draft.
+ */
+async function restoreVersion({ documentId, filename, version, newest }) {
+  const ok = await openModal({
+    title: `MAKE V${version} CURRENT`,
+    what: `V${version} of ${filename} becomes the text every point reading the newest draft is `
+      + `answered from. Nothing is lost — it is filed forward as v${newest + 1}, and v${newest} stays on the rail. `
+      + `Points pinned to a version keep the version they are pinned to.`,
+    ok: 'MAKE CURRENT',
+  });
+  if (ok == null) return;
+
+  try {
+    const out = await post(`/api/documents/${documentId}/versions/${version}/restore`);
+    closeSheet();
+    await reload();
+    host.onArchiveChanged?.();
+    if (selected != null) {
+      const n = byNode.get(selected);
+      if (n?.kind === 'document') await openPoint(selected);
+      else refreshSources();
+    }
+    toast(out.identical
+      ? `v${version} was already the current text — filed as v${out.version}`
+      : `v${version} restored as v${out.version} · +${out.additions} −${out.deletions}`);
   } catch (err) { toast(err.message, 'err'); }
 }
 
@@ -1380,8 +1523,9 @@ const thinkHtml = (reasoning, open = false) => (reasoning ? `
     <div class="thinkBody">${esc(reasoning)}</div>
   </details>` : '');
 
-function turnHtml(m, isLast) {
+function turnHtml(m, isLast, { cut = null, before = false } = {}) {
   const you = m.role === 'user';
+  const here = cut != null && m.id === cut;
   const acts = [];
   if (!you) {
     acts.push(`<button class="turnAct" data-msg="${m.id}" data-act="copy">COPY</button>`);
@@ -1390,10 +1534,19 @@ function turnHtml(m, isLast) {
       acts.push(`<button class="turnAct" data-msg="${m.id}" data-act="version">⇪ FILE AS VERSION</button>`);
     }
   }
+  // Where this conversation is treated as beginning. A point on a graph is
+  // answered from its upstream sources plus its own history, so cutting the
+  // history here is how a long point stops re-arguing itself every turn.
+  acts.push(`<button class="turnAct${here ? ' on' : ''}" data-msg="${m.id}"
+      data-act="${here ? 'startClear' : 'startHere'}"
+      title="${here
+        ? 'This point reads its conversation from here — click to send all of it again'
+        : 'Send this message onward, and nothing above it'}">⇤ ${here ? 'FROM HERE' : 'START HERE'}</button>`);
   if (isLast && m.error) acts.push(`<button class="turnAct" data-msg="${m.id}" data-act="retry">RETRY</button>`);
 
   return `
-    <div class="turn ${you ? 'you' : 'them'}${m.error ? ' fail' : ''}">
+    <div class="turn ${you ? 'you' : 'them'}${m.error ? ' fail' : ''}${
+      before ? ' preStart' : ''}${here ? ' startsHere' : ''}">
       <div class="turnTop">
         <span class="who">${you ? '▸ YOU' : '◈ MODEL'}</span>
         <span class="spacer"></span>
@@ -1411,7 +1564,16 @@ function renderLog() {
   const s = sessions.get(selected);
   const stored = inspected?.messages ?? [];
 
-  const parts = stored.map((m, i) => turnHtml(m, i === stored.length - 1));
+  const cut = inspected?.thread?.context_from_message_id ?? null;
+  const cutAt = cut == null ? -1 : stored.findIndex((m) => m.id === cut);
+
+  const parts = stored.map((m, i) => (
+    (i === cutAt && cutAt > 0 ? `
+      <div class="startMark">
+        <span>⇤ READ FROM HERE — ${cutAt} EARLIER MESSAGE${cutAt === 1 ? '' : 'S'} KEPT, NOT SENT</span>
+        <button class="turnAct" data-msg="${m.id}" data-act="startClear">↺ SEND ALL</button>
+      </div>` : '')
+    + turnHtml(m, i === stored.length - 1, { cut, before: cutAt > 0 && i < cutAt })));
 
   if (s) {
     if (s.user) {
@@ -1471,6 +1633,23 @@ el.inspLog.addEventListener('click', async (ev) => {
     await navigator.clipboard.writeText(m.content ?? '');
     btn.textContent = 'COPIED';
     setTimeout(() => { btn.textContent = 'COPY'; }, 1200);
+    return;
+  }
+
+  if (act === 'startHere' || act === 'startClear') {
+    const threadId = inspected?.thread?.id;
+    if (threadId == null) return;
+    try {
+      await patch(`/api/threads/${threadId}`, {
+        contextFromMessageId: act === 'startClear' ? null : msgId,
+      });
+      await loadThread(selected);
+      refreshSources();
+      host.onArchiveChanged?.();
+      toast(act === 'startClear'
+        ? 'The whole conversation is sent again'
+        : 'Starts there — the turns above it are kept, not sent', 'info');
+    } catch (err) { toast(err.message, 'err'); }
     return;
   }
 
@@ -1647,7 +1826,10 @@ el.cInput.addEventListener('keydown', (ev) => {
 /** Where a new point lands: the middle of what you are looking at. */
 function centreOfView() {
   const r = el.canvas.getBoundingClientRect();
-  const c = toWorld(r.left + r.width / 2, r.top + r.height / 2);
+  const v = viewBox();
+  // Dropped into the middle of what is on screen, not the middle of the canvas
+  // element — with the inspector up, those are not the same point.
+  const c = toWorld(r.left + v.width / 2, r.top + v.height / 2);
   return { x: Math.round(c.x - NODE_W / 2), y: Math.round(c.y - 70) };
 }
 
@@ -1931,6 +2113,8 @@ async function openAtlas() {
           <button class="atlasChip${g.id === graphId ? ' here' : ''}" data-go="${g.id}"
                   title="Open ${esc(g.title)}">${esc(g.title)}</button>`).join('')}</span>
       </span>
+      ${i.kind === 'thread' ? `<button class="turnAct" data-rename="threads:${i.id}"
+              data-name="${esc(i.name)}" title="Rename this conversation">✎</button>` : ''}
       <button class="turnAct" data-place="${i.kind}:${i.id}"
               title="Put this on the canvas that is open">+ HERE</button>
     </div>`).join('');
@@ -1941,7 +2125,8 @@ async function openAtlas() {
         d.pins?.length ? ` — pinned to v${d.pins.join(', v')}` : ''}">◆ ${esc(clip(d.name, 26))}${
         d.points > 1 ? ` ×${d.points}` : ''}</span>`),
       ...g.threads.map((th) => `<span class="atlasHold" title="${esc(th.name)} — ${th.messages} messages">◈ ${esc(clip(th.name, 26))}${
-        th.points > 1 ? ` ×${th.points}` : ''}</span>`),
+        th.points > 1 ? ` ×${th.points}` : ''}<button class="holdRename" data-rename="threads:${th.id}"
+          data-name="${esc(th.name)}" title="Rename ${esc(th.name)}">✎</button></span>`),
     ].join('');
 
     const shares = g.shares.length
@@ -1954,6 +2139,8 @@ async function openAtlas() {
       <div class="atlasGraph${g.id === graphId ? ' current' : ''}">
         <div class="atlasTop">
           <button class="atlasName" data-go="${g.id}">⁂ ${esc(g.title)}</button>
+          <button class="turnAct" data-rename="graphs:${g.id}" data-name="${esc(g.title)}"
+                  title="Rename this graph">✎</button>
           <span class="pickMeta">${g.node_count} PT${g.node_count === 1 ? '' : 'S'} · ${g.edge_count} LINE${
             g.edge_count === 1 ? '' : 'S'} · ${esc(fmtWhen(g.updated_at))}${g.id === graphId ? ' · OPEN' : ''}</span>
         </div>
@@ -1981,6 +2168,14 @@ async function openAtlas() {
       <h3 class="atlasHead">EVERY GRAPH</h3>
       ${graphRows}`,
     onPick: async (target) => {
+      // A name shows in several places on this sheet at once — the shelf, the
+      // holds, the share chips — so the atlas is re-read rather than patched.
+      const rename = target.closest('[data-rename]');
+      if (rename) {
+        const [kind, id] = rename.dataset.rename.split(':');
+        if (await renameSubject(kind, Number(id), rename.dataset.name)) await openAtlas();
+        return;
+      }
       const go = target.closest('[data-go]');
       if (go) {
         closeSheet();
@@ -2050,6 +2245,64 @@ async function openUsage(kind, id, name) {
       travelTo(Number(go.dataset.go), Number(go.dataset.node));
     },
   });
+}
+
+/* ------------------------------------------------------------------ naming
+
+   A graph is named before the work in it exists, and a conversation branched
+   off a point inherits the name of what it came from — so both start out
+   named after their origin rather than their subject. Renaming is therefore
+   offered wherever either is shown: the graph bar, the atlas, a card, the
+   inspector. `suggest` puts the model behind the field, reading what is
+   actually in the thing; it proposes, and the user keeps or discards it.
+   ------------------------------------------------------------------------ */
+
+/** Ask the model what this conversation or graph should be called. */
+const suggestNameFor = (kind, id) => async () => (await post(`/api/${kind}/${id}/suggest-title`, {})).title;
+
+/**
+ * Rename a conversation or a graph. Returns the new name, or null when the
+ * user backed out — callers use that to decide whether to repaint.
+ */
+async function renameSubject(kind, id, current) {
+  const isGraph = kind === 'graphs';
+  const answer = await openModal({
+    title: isGraph ? 'RENAME GRAPH' : 'RENAME CONVERSATION',
+    what: isGraph
+      ? 'The name the atlas, the picker and every source list carry.'
+      : 'The conversation itself is renamed — every graph standing on it, and the deck, show the new name.',
+    label: 'Name',
+    value: current ?? '',
+    ok: 'RENAME',
+    suggest: suggestNameFor(kind, id),
+  });
+  const title = answer?.value.trim();
+  if (!title || title === current) return null;
+
+  try {
+    await patch(`/api/${kind}/${id}`, { title });
+  } catch (err) {
+    toast(err.message, 'err');
+    return null;
+  }
+
+  if (isGraph) await loadGraphs({ select: graphId });
+  else {
+    // Nothing on a canvas is a copy, so a renamed conversation is renamed on
+    // every canvas at once — the open one is simply re-read.
+    await reload();
+    host.onArchiveChanged?.();
+  }
+  toast(`Renamed to “${title}”`);
+  return title;
+}
+
+/** The ✎ on a point: renames the conversation the point stands on. */
+async function renamePoint(id) {
+  const n = byNode.get(id);
+  if (!n || n.kind !== 'thread') return;
+  const named = await renameSubject('threads', n.thread_id, n.thread_title ?? titleOf(n));
+  if (named && selected === id) el.inspTitle.textContent = titleOf(byNode.get(id) ?? n);
 }
 
 /* ------------------------------------------------------------------ layout */
@@ -2146,15 +2399,8 @@ el.newGraph.addEventListener('click', async () => {
   toast('Graph created — put a book or a conversation down to start it');
 });
 
-el.renameGraph.addEventListener('click', async () => {
-  if (graphId == null) return;
-  const current = graphs.find((g) => g.id === graphId);
-  const answer = await openModal({
-    title: 'RENAME GRAPH', label: 'Name', value: current?.title ?? '', ok: 'RENAME',
-  });
-  if (!answer?.value.trim()) return;
-  await patch(`/api/graphs/${graphId}`, { title: answer.value.trim() });
-  await loadGraphs({ select: graphId });
+el.renameGraph.addEventListener('click', () => {
+  if (graphId != null) renameSubject('graphs', graphId, graphs.find((g) => g.id === graphId)?.title);
 });
 
 el.dropGraph.addEventListener('click', async () => {
@@ -2173,6 +2419,8 @@ el.dropGraph.addEventListener('click', async () => {
   await loadGraphs();
   toast('Graph deleted — the conversations are still on the deck', 'info');
 });
+
+el.inspRename.addEventListener('click', () => { if (selected != null) renamePoint(selected); });
 
 el.atlasBtn.addEventListener('click', openAtlas);
 el.importBtn.addEventListener('click', openImport);
@@ -2270,7 +2518,7 @@ el.sheetBody.addEventListener('click', (ev) => sheetPick?.(ev.target));
  * an object — `{ value }` for a prompt, `{ withThread }` when a checkbox was
  * offered — so a caller never has to guess which shape it asked for.
  */
-function openModal({ title, what = '', label = null, value = '', confirmWord = null, ok = 'CONFIRM', danger = false, extra = null }) {
+function openModal({ title, what = '', label = null, value = '', confirmWord = null, ok = 'CONFIRM', danger = false, extra = null, suggest = null }) {
   return new Promise((resolve) => {
     el.modalTitle.textContent = title;
     el.modalWhat.textContent = what;
@@ -2299,6 +2547,11 @@ function openModal({ title, what = '', label = null, value = '', confirmWord = n
     // never both, or the one button is saying two things at once.
     el.modalOk.classList.toggle('danger', danger);
     el.modalOk.classList.toggle('go', !danger);
+    // Only naming dialogs get it: the model proposes into the field above, and
+    // the write still happens on CONFIRM, with whatever the user left there.
+    el.modalSuggest.classList.toggle('hidden', !suggest);
+    el.modalSuggest.disabled = false;
+    el.modalSuggest.textContent = '✦ SUGGEST';
     el.modal.classList.remove('hidden');
     (wants ? el.modalInput : el.modalOk).focus();
     if (wants && !confirmWord) el.modalInput.select();
@@ -2309,8 +2562,25 @@ function openModal({ title, what = '', label = null, value = '', confirmWord = n
       el.modalOk.removeEventListener('click', accept);
       el.modalCancel.removeEventListener('click', cancel);
       el.modalInput.removeEventListener('keydown', onKey);
+      el.modalSuggest.removeEventListener('click', propose);
       document.removeEventListener('keydown', onEsc);
       resolve(result);
+    };
+
+    const propose = async () => {
+      el.modalSuggest.disabled = true;
+      el.modalSuggest.textContent = '✦ READING…';
+      el.modalErr.textContent = '';
+      try {
+        el.modalInput.value = await suggest();
+        el.modalInput.focus();
+        el.modalInput.select();
+      } catch (err) {
+        el.modalErr.textContent = `NO NAME — ${err.message}`;
+      } finally {
+        el.modalSuggest.disabled = false;
+        el.modalSuggest.textContent = '✦ AGAIN';
+      }
     };
 
     const accept = () => {
@@ -2330,6 +2600,7 @@ function openModal({ title, what = '', label = null, value = '', confirmWord = n
     el.modalOk.addEventListener('click', accept);
     el.modalCancel.addEventListener('click', cancel);
     el.modalInput.addEventListener('keydown', onKey);
+    el.modalSuggest.addEventListener('click', propose);
     document.addEventListener('keydown', onEsc);
   });
 }
@@ -2473,8 +2744,10 @@ async function focusThread(threadId, { offerPlacement = true } = {}) {
   if (found.node) {
     if (graphId !== found.node.graph_id) await openGraph(found.node.graph_id);
     if (byNode.has(found.node.id)) {
-      centreOn(found.node.id);
+      // openPoint raises the inspector before it awaits anything, so centring
+      // after it is what puts the point in the space actually left over.
       await openPoint(found.node.id);
+      centreOn(found.node.id);
     }
     return true;
   }
@@ -2486,7 +2759,7 @@ async function focusThread(threadId, { offerPlacement = true } = {}) {
 function centreOn(nodeId) {
   const n = byNode.get(nodeId);
   if (!n) return;
-  const r = el.canvas.getBoundingClientRect();
+  const r = viewBox();
   cam.z = Math.min(Z_MAX, Math.max(Z_MIN, 1));
   cam.x = r.width / 2 - (n.x + NODE_W / 2) * cam.z;
   cam.y = r.height / 2 - (n.y + 90) * cam.z;

@@ -215,6 +215,13 @@ body {
      without the centring maths going out of step with it. */
   --winW: min(660px, 66vw);
   --winH: min(480px, calc(100vh - 300px));
+  /* How far each window behind steps back, out and up. In variables because a
+     phone-width deck needs a much smaller fan than a desktop one — and because
+     the pinch gesture writes --spread as an inline style, which no media query
+     could outrank. */
+  --stepX: 50px;
+  --stepY: -34px;
+  --stepZ: -175px;
   /* Deliberately NOT preserve-3d.
      The windows are parallel planes that never intersect, so nothing here needs
      a shared 3D space — perspective on this element projects each child on its
@@ -256,9 +263,9 @@ body.oracleOpen .deck { right: 372px; }
      the side would be a carousel, not a cross-section. */
   transform:
     translate3d(
-      calc(var(--r) * 50px * var(--spread)),
-      calc(var(--r) * -34px * var(--spread)),
-      calc(var(--r) * -175px))
+      calc(var(--r) * var(--stepX) * var(--spread)),
+      calc(var(--r) * var(--stepY) * var(--spread)),
+      calc(var(--r) * var(--stepZ)))
     rotateY(-9deg) rotateX(1deg)
     scale(var(--zoom));
   transform-origin: 50% 50%;
@@ -579,13 +586,26 @@ body.oracleOpen .index { padding-right: 400px; }
 .oracle.away { transform: translateX(calc(100% + 30px)); opacity: 0; pointer-events: none; }
 
 .oracleTop {
-  display: flex; align-items: center; gap: var(--s3);
+  display: flex; align-items: center; gap: var(--s3); flex-wrap: wrap;
   padding: var(--s3) var(--s4);
   border-bottom: 1px solid var(--edgeSoft);
 }
-.oracleTop > div { flex: 1; min-width: 0; }
-.oracleTop h2 { margin: 0; font-family: var(--mono); font-size: 13px; letter-spacing: .2em; color: var(--cyan); }
-.oracleSub { margin: 1px 0 0; font-family: var(--mono); font-size: 9px; letter-spacing: .1em; color: var(--dim); text-transform: uppercase; }
+/* The identity takes the slack but keeps a floor. With PIN SOURCES, the model
+   picker and the stow button beside it there is rarely 360px to go round, and
+   an identity that can be crushed to nothing was crushed to nothing — the
+   subtitle broke to one word per line and ran underneath the buttons. Below the
+   floor the controls wrap onto a second line instead. */
+.oracleTop > div { flex: 1 1 auto; min-width: 96px; }
+.oracleTop h2 {
+  margin: 0; font-family: var(--mono); font-size: 13px; letter-spacing: .2em; color: var(--cyan);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.oracleSub {
+  margin: 1px 0 0; font-family: var(--mono); font-size: 9px; letter-spacing: .1em;
+  color: var(--dim); text-transform: uppercase;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.oracleTop .hudBtn, .oracleTop .ghostBtn { flex: none; }
 .oracleTop .hudSelect { max-width: 106px; font-size: 9.5px; height: 24px; }
 
 .oracleMark { font-size: 15px; color: var(--cyan); text-shadow: 0 0 14px var(--cyanGlow); animation: pulse 3s ease-in-out infinite; }
@@ -697,11 +717,42 @@ body.oracleOpen .index { padding-right: 400px; }
 /* ----------------------------------------------------------- narrow decks */
 
 @media (max-width: 1100px) {
-  body.oracleOpen .deck { padding-right: 0; }
-  .oracle { top: auto; left: 26px; right: 26px; bottom: 26px; width: auto; height: 58vh; }
-  .win { width: min(620px, 86vw); }
-  body.oracleOpen .deckHint { right: 26px; }
+  /* The Oracle stops being a column beside the deck and becomes a panel under
+     it, so what the deck gives up is height rather than width. */
+  .oracle {
+    top: auto; left: 26px; right: 26px; bottom: 26px;
+    width: auto; height: 52dvh;
+  }
+  .oracle.away { transform: translateY(calc(100% + 30px)); }
+  body.oracleOpen .deck { right: 0; }
+
+  /* Retarget the window box, not `width`: the centring margin is computed from
+     --winW, so a `width` that disagrees with it slides every window off centre
+     by half the difference — which is what used to push the stack off the left
+     edge here. */
+  .deck {
+    --winW: min(620px, calc(100vw - 80px));
+    --winH: min(480px, calc(100dvh - 250px));
+    --stepX: 32px;
+    --stepY: -24px;
+  }
+  body.oracleOpen .deck { --winH: min(420px, calc(48dvh - 150px)); }
+
+  /* The deck is centred in the stage, so the stage has to end where the Oracle
+     panel begins — centring in the whole console would park the record you are
+     reading behind the panel. */
+  body.oracleOpen .stage { inset: 86px 0 calc(52dvh + 34px) 0; }
+
+  /* Eight buttons in a bar that has already given its slack to the query field:
+     they keep their size and the group scrolls. `flex: none` in the base rule
+     is what used to march them straight off the right-hand edge. */
+  .barRight { flex: 0 1 auto; min-width: 0; overflow-x: auto; scrollbar-width: none; }
+  .barRight::-webkit-scrollbar { display: none; }
+  .barRight > * { flex: none; }
+
   .deckHint { left: 26px; }
+  /* Underneath the Oracle panel, where it is unreadable rather than absent. */
+  body.oracleOpen .deckHint { display: none; }
   .readout { display: none; }
 }
 
@@ -785,6 +836,9 @@ body.oracleOpen .index { padding-right: 400px; }
 .verRow.isFrom { border-left-color: var(--alert); }
 .verRow.isTo { border-left-color: var(--cyan); }
 .verNo { color: var(--cyan); min-width: 34px; }
+/* A restored draft is not the same event as an edit: it says which older
+   version it put back, right where the version number is read. */
+.verFrom { color: var(--dim); margin-left: 5px; }
 .verStat { min-width: 92px; }
 .verMeta { color: var(--dim); }
 .verActs { margin-left: auto; display: flex; gap: 4px; }
@@ -879,6 +933,24 @@ body.oracleOpen .snacks { left: calc(50% - 190px); }
 .turnActs { display: flex; gap: 4px; opacity: 0; transition: opacity .15s; }
 .turn:hover .turnActs, .turnActs:focus-within { opacity: 1; }
 
+/* ------------------------------------------------- where a record begins
+
+   Above the mark the record is intact — readable, copyable, exportable, and
+   still searched by the Oracle. It is simply not sent. Dimmed rather than
+   hidden, with the reason written on the line where the model starts reading. */
+
+.turn.preStart { opacity: .4; }
+.turn.preStart:hover { opacity: .75; }
+.turn.startsHere .turnWho { color: var(--amber); }
+
+.startMark {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: var(--s3); flex-wrap: wrap;
+  margin: var(--s2) 0; padding-top: var(--s3);
+  border-top: 1px dashed rgba(255, 180, 84, .35);
+  font-family: var(--mono); font-size: 9px; letter-spacing: .12em; color: var(--amber);
+}
+
 /* The rewrite popup, anchored to the passage it will rewrite. */
 .rewritePop {
   position: fixed; z-index: 280;
@@ -941,8 +1013,9 @@ body.oracleOpen .snacks { left: calc(50% - 190px); }
 }
 .modalInput:focus { border-color: var(--cyan); box-shadow: inset 0 0 18px rgba(111, 230, 255, .1); }
 .modalErr { margin: 0; min-height: 14px; font-family: var(--mono); font-size: 10px; color: var(--alert); }
+.modalSpacer { flex: 1; }
 .modalActs {
-  display: flex; justify-content: flex-end; gap: var(--s2);
+  display: flex; align-items: center; justify-content: flex-end; gap: var(--s2);
   padding: var(--s3) var(--s4);
   border-top: 1px solid var(--edgeSoft);
 }
@@ -1195,8 +1268,199 @@ body.oracleOpen .snacks { left: calc(50% - 190px); }
   margin: var(--s3) 0 0;
   font: 9px var(--mono); letter-spacing: .18em; color: var(--dim); text-transform: uppercase;
 }
+/* Tick · name · rename · how much of it travels. The pencil gets a column of
+   its own so a record row (which also carries a mode picker) and a graph row
+   (which does not) line their names up against the same edge. */
+.pickRow.srcPick { grid-template-columns: auto 1fr auto auto; }
 .srcPickName {
   grid-column: 2 / 3;
   font-size: 12.5px; color: var(--fg); overflow-wrap: anywhere;
 }
-.srcModeSel { grid-column: 3 / 4; grid-row: 1 / 2; }
+.srcRename {
+  grid-column: 3 / 4; grid-row: 1 / 2; align-self: center;
+  padding: 1px 6px; background: none; border: 1px solid transparent;
+  color: var(--dim); font: 11px var(--mono); line-height: 1.4; cursor: pointer;
+}
+.srcRename:hover, .srcRename:focus-visible { border-color: var(--edge); color: var(--amber); }
+.pickRow.srcPick .srcModeSel { grid-column: 4 / 5; grid-row: 1 / 2; }
+
+/* ===========================================================================
+   Phone (≤720px)
+
+   The console is a wide instrument: chrome pinned 26px off every edge, a
+   360px Oracle down the right, a rail down the left, two readouts in the
+   corners, and a stack of windows fanned across whatever is left. On a 390px
+   viewport there is no "left" and no "right" — there is one column. So the
+   layout stops being four things around a deck and becomes two things stacked:
+   the deck, and whatever you have raised over it.
+
+   The depth stays. It is the interface, not decoration — a shallower fan and
+   smaller windows, but still a stack you travel through, and the touch
+   handlers for that (swipe to traverse, pinch to spread) were already there.
+   =========================================================================== */
+
+@media (max-width: 720px) {
+
+  /* Corner brackets 10px off the edge, around chrome that now starts 8px off
+     the edge — decoration that would cut through the bar. */
+  .frame { display: none; }
+
+  /* --- the bar: identity out, query and actions in ----------------------- */
+
+  .bar {
+    top: 8px; left: 8px; right: 8px;
+    height: auto; flex-wrap: wrap;
+    gap: var(--s2); padding: var(--s2);
+  }
+  /* ARCHIVE DECK and its counters are the one thing here that says nothing you
+     cannot see by looking at the deck. */
+  .ident { display: none; }
+  .back { flex: none; }
+  .seek { flex: 1 1 120px; }
+  /* Eight controls, none of them optional. They keep their size and the row
+     scrolls, rather than shrinking into a row of unreadable glyphs. */
+  .barRight {
+    flex: 1 0 100%;
+    overflow-x: auto; overflow-y: hidden;
+    padding-bottom: 2px;
+    scrollbar-width: none; -webkit-overflow-scrolling: touch;
+  }
+  .barRight::-webkit-scrollbar { display: none; }
+  .barRight > * { flex: none; }
+
+  /* --- the deck ---------------------------------------------------------- */
+
+  .stage { inset: 98px 0 0 0; }
+
+  .deck {
+    /* A shallow fan: at full width a 50px step puts the window behind halfway
+       off the screen, which reads as a layout bug rather than as depth. */
+    --stepX: 18px;
+    --stepY: -14px;
+    --stepZ: -150px;
+    /* Windows open at 60% of the room they could take — 40% smaller than the
+       full-bleed default. A phone-sized window that fills the screen turns the
+       deck into a single page: you cannot see that there is a stack, only the
+       one record in front of you. Shrunk, the fan is visible again, the swipe
+       has somewhere to go, and reading one record whole is one tap on ⤢, which
+       still takes the front window to the full viewport. */
+    --winScale: .6;
+    --winW: calc((100vw - 20px) * var(--winScale));
+    --winH: calc((100dvh - 210px) * var(--winScale));
+    perspective: 1400px;
+  }
+  /* The Oracle is a bottom sheet here, not a column, so there is no width for
+     the deck to give up to it. */
+  body.oracleOpen .deck { right: 0; }
+
+  .deck.expanded .win[data-band="front"] { --winW: 100vw; --winH: 100dvh; }
+  .deck.collapsed .win[data-band="front"] { --winH: 76px; }
+
+  .winTop { padding: var(--s2) var(--s3); gap: var(--s2); }
+  .winTitle { font-size: 13px; }
+  .winMeta { padding: 5px var(--s3); gap: var(--s2); }
+  .winBody { padding: var(--s3); gap: var(--s3); }
+  .turn { max-width: 100%; }
+  .deck.expanded .win[data-band="front"] .turn { max-width: 100%; }
+
+  /* Row actions and tabs: same answer as the bar — real size, and the row
+     scrolls.
+
+     `flex: none` is not decoration. Both of these are items in a column flex
+     box, and making an element a scroll container drops its automatic minimum
+     size to zero — so the record's long body, shrinking its siblings to fit,
+     squashed the document's own toolbar to nothing but its padding. */
+  .winTabs, .tools {
+    flex: none;
+    overflow-x: auto; overflow-y: hidden; flex-wrap: nowrap;
+    scrollbar-width: none;
+  }
+  .winTabs::-webkit-scrollbar, .tools::-webkit-scrollbar { display: none; }
+  .winTabs > *, .tools > * { flex: none; }
+  .toolsMeta { margin-left: 0; }
+  .winActs { overflow-x: auto; scrollbar-width: none; }
+  .winActs::-webkit-scrollbar { display: none; }
+  .winActs > * { flex: none; }
+
+  /* The composer at the foot of the front window: the field takes its own
+     line, the controls sit under it. */
+  .winFoot { flex-wrap: wrap; padding: var(--s2) var(--s3); }
+  .composerInput { flex: 1 1 100%; order: -1; }
+  .composerStage { max-width: 100%; flex: 1 1 auto; padding-bottom: 0; }
+  .winFoot .hudSelect { max-width: 100px; }
+
+  /* --- the readouts around the deck --------------------------------------- */
+
+  /* All four of these live in the margins, and on a phone the deck IS the
+     margins. The rail's job — where you are in the stack — is carried by the
+     window count in the record itself; the hint describes gestures a touch
+     screen does not have. */
+  .rail, .readout, .deckHint, .traffic { display: none; }
+
+  /* --- the Oracle: a bottom sheet ---------------------------------------- */
+
+  .oracle {
+    top: auto; left: 0; right: 0; bottom: 0;
+    width: auto; height: 66dvh;
+    border: 0; border-top: 2px solid var(--cyan);
+    padding-bottom: env(safe-area-inset-bottom);
+  }
+  .oracle.away { transform: translateY(calc(100% + 30px)); }
+  .oracleTop { flex-wrap: wrap; padding: var(--s2) var(--s3); }
+  .oracleSub { display: none; }
+  .oracleTop .hudSelect { max-width: 96px; }
+  .oracleLog { padding: var(--s3); }
+  .oracleForm { padding: var(--s2) var(--s3) var(--s3); }
+  .oracleTurn .said { max-width: 100%; }
+  .oracleTab { right: 12px; bottom: calc(12px + env(safe-area-inset-bottom)); }
+
+  .index { padding: var(--s3) var(--s3) 80px; grid-template-columns: 1fr; }
+  body.oracleOpen .index { padding-right: var(--s3); }
+
+  /* --- dialogs ------------------------------------------------------------ */
+
+  .modalBox { width: calc(100vw - 16px); }
+  .sheetBox { width: calc(100vw - 16px); height: 88dvh; }
+  .sheetBody { padding: var(--s3); }
+  .modalBody, .modalTop, .modalActs { padding: var(--s3); }
+  .modalActs { flex-wrap: wrap; }
+  .modalActs .hudBtn { flex: 1; justify-content: center; }
+  /* Name, meta and mode stack; three columns of it do not fit. */
+  .pickRow { grid-template-columns: auto 1fr; }
+  /* The source rows keep their rename pencil on the name's line — it is one
+     glyph wide, and dropped below the name it would read as the row's action
+     rather than as an edit of the name it sits next to. */
+  .pickRow.srcPick { grid-template-columns: auto 1fr auto; }
+  .pickRow.srcPick .srcModeSel { grid-column: 1 / -1; grid-row: auto; }
+  /* The row's own action drops below the text rather than beside it, but stays
+     its own size — a full-bleed ✕ under every row reads as the row's headline. */
+  .pickRow > .winAct { grid-column: 1 / -1; grid-row: auto; justify-self: end; }
+  .srcModeSel { grid-column: 1 / -1; grid-row: auto; }
+
+  /* Anchored to a text selection by inline styles, at a width wider than the
+     screen — pinned to the viewport instead. */
+  .rewritePop {
+    left: 8px !important; right: 8px;
+    width: auto; flex-wrap: wrap;
+  }
+  .rewriteInstr { flex: 1 1 100%; order: -1; }
+
+  .snacks { left: 50%; bottom: calc(16px + env(safe-area-inset-bottom)); width: calc(100vw - 24px); }
+  body.oracleOpen .snacks { left: 50%; }
+  .snack { max-width: 100%; }
+
+  .docText { max-width: none; }
+  .verRow, .traceRow { font-size: 9.5px; }
+  /* A version row's actions drop to their own line and wrap there. The labels
+     stay on one line each — a two-line label inside a 22px button spills out of
+     it, which reads as a broken control rather than a small one. */
+  .verActs { margin-left: 0; flex: 1 0 100%; flex-wrap: wrap; }
+  .winAct { white-space: nowrap; }
+}
+
+/* Every reveal-on-hover control on this console — the per-turn actions and the
+   window's own tools — has no gesture behind it on a touch screen. They stay
+   out rather than becoming unreachable. */
+@media (hover: none) {
+  .turnActs { opacity: 1; }
+}

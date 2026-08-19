@@ -186,6 +186,50 @@ editing the first message re-titles the thread.
 Retry uses the top bar's model, so switching there before clicking it re-runs a
 failed turn on a different model.
 
+### Where a conversation starts
+
+A long thread carries its own beginning into every later question. The twenty
+turns that settled chapter one are re-sent, re-read and re-paid-for while you
+are asking about chapter nine — and they compete for the model's attention with
+the part you actually care about.
+
+Every message carries **⇤ Start here**. Click it on a question or an answer and
+that message becomes the beginning as far as the model is concerned: the turn
+you send next is built from that message onward and nothing above it.
+
+Nothing is deleted. The earlier turns stay in the thread, stay readable, stay
+copyable and exportable, and the Oracle still searches them — they are dimmed,
+with a line at the cut saying how many are being kept but not sent. The same
+message then reads **⇤ Sending from here**, and **↺ Send all of it again**
+clears the mark.
+
+The usual shape of it is *keep the draft, drop the argument that produced it*:
+mark the answer that finally got the chapter right, and every later turn reads
+that chapter instead of the six rounds of negotiation behind it.
+
+The mark lives on the thread, so it holds everywhere the conversation is read:
+its own turns in the deck, its point on a graph, and the transcript other
+records and graphs read it as when it is attached to them as a source. It is
+cleared automatically if the message it points at is edited or retried away.
+
+### Naming, and letting the model name it
+
+A conversation is named after the file it opened on, or the first sixty
+characters you typed. A graph is called `New graph`, because the work in it had
+not happened yet. Both are named before anyone knows what they turned into.
+
+So renaming is offered everywhere either of them is listed — the thread sidebar
+and header, every record window in the deck, the source pickers, the graph bar,
+a point on the canvas, the point inspector, and every row of the Atlas.
+
+Every one of those dialogs carries **✦ Suggest a name**. It reads what is
+actually in the thing — the opening question and the last exchange for a
+conversation, the books and the questions asked of each point for a graph — and
+proposes a short title in the same language as the material. It arrives *in the
+field*: edit it, keep it, ask for another, or cancel and leave the name alone.
+Nothing is written until you confirm, and there is no endpoint that renames
+anything on its own.
+
 ### Nothing is erased from tracing
 
 Messages leaving a thread never remove the traces of the calls that produced
@@ -296,6 +340,7 @@ the record window, through the lab's own endpoints:
 | `⇪ FILE AS VERSION` (on any model answer) | file that answer as the next version of the document it rewrote |
 | `✎ RENAME` / `✕ REMOVE` | on the document, and on the record itself (`✎` `✕` in the window chrome) |
 | `⧉ COPY`, `⤓ DOCX`, `⤓ RTF` | the current text, any version, or a single model answer |
+| `⤒ MAKE CURRENT` on a version | put an older draft back in the slot — filed *forward*, so nothing after it is lost |
 | `✕` on a version | drop one saved state; the rest stay |
 
 Anything that cannot be undone is gated the same way the lab gates it: a dialog
@@ -537,6 +582,7 @@ noticed. Both file a version rather than overwriting silently:
 | --- | --- | --- |
 | `✎ EDIT TEXT` | `documents.text` — what the models read | the uploaded bytes; a PDF's pages are still the pages that arrived |
 | `⇄ REPLACE FILE` | text, bytes, kind, page count — a new upload into the same slot | the point, its id, its lines; nothing on the canvas is redrawn |
+| `⤒ MAKE CURRENT` (reading a pinned draft) | `documents.text` — that draft becomes what the newest reads | every pin; a point pinned to a version keeps it |
 
 Editing a draft you pinned to saves *forward* as the newest version, never in
 place, and the editor says so. After either write, points reading `newest` are
@@ -562,12 +608,37 @@ nothing claims a change nobody made. `POST /api/documents/:id/replace` and
 *model's* answer with `⇪ FILE AS VERSION` is unchanged: an answer identical to
 the current text is still refused, because nobody chose that text.
 
+### Going back to a version
+
+Filing every draft is only half of it: the rail was a record you could read, diff
+and export, but not *choose from*. A model's rewrite filed as v6, or a v3 that
+turned out to be the better chapter, sat next to the live text without any way
+to become it — the way back was a download, a paste into the editor and a save.
+
+`⤒ MAKE CURRENT` is that round trip as one button, on every version but the
+newest: on the rail in the lab and the deck, and on the sheet reading a pinned
+draft on the canvas. It is **not** a rewind. The chosen text is written to
+`documents.text` *and* filed forward as the next version, carrying
+`restored_from` — shown as `← V3` on the deck's rail and a `from v3` tag in the
+lab. So:
+
+* the drafts made after the one you went back to are still there, and can be
+  restored in their turn — going back again is another restore, never an undo;
+* every thread and every point reading the newest draft is answered from the
+  restored text on its next turn, and points pinned to a version keep their pin;
+* only the text moves. `kind`, the page count and the uploaded bytes describe the
+  file that is actually stored, and versions carry no blobs — restoring v3's text
+  does not put v3's PDF back, and copying its page count would be a lie the next
+  export would expose.
+
 
 ## Storage
 
 ```
 documents  id, filename, kind, text, chars, words, pages, bytes, sha256(unique)
-threads    id, title, document_id → documents, model, created_at, updated_at
+threads    id, title, document_id → documents, model, created_at, updated_at,
+           context_from_message_id → messages  (where the model starts reading;
+                                                NULL sends the whole thread)
 messages   id, thread_id → threads, role, content, reasoning, model, task, ms, error
 thread_sources
            id, thread_id → threads, kind('thread'|'graph'),
@@ -876,11 +947,13 @@ large document, a cache hit shows up as a dramatically lower TTFT on later turns
 | `GET` | `/api/documents` | library listing (no text) |
 | `POST` | `/api/documents/:id/replace` | re-upload into the same slot (multipart `file`); files it as the next version |
 | `PUT` | `/api/documents/:id/text` | hand-edit the text; files it as the next version |
+| `POST` | `/api/documents/:id/versions/:v/restore` | make an older version the live text; files it forward as the next version, tagged `restored_from` |
 | `DELETE` | `/api/documents/:id` | remove from library |
 | `GET` | `/api/threads` | sidebar listing |
 | `POST` | `/api/threads` | create, optionally bound to `documentId` |
 | `GET` | `/api/threads/:id` | thread + full message history |
-| `PATCH` | `/api/threads/:id` | rename / change model / attach `documentId` (`null` detaches) |
+| `PATCH` | `/api/threads/:id` | rename / change model / attach `documentId` (`null` detaches) / set `contextFromMessageId` — where the model is told the conversation begins (`null` sends all of it) |
+| `POST` | `/api/threads/:id/suggest-title` | a proposed name, read from what is in the conversation. Returns `{ title, model, current }` and writes nothing |
 | `DELETE` | `/api/threads/:id` | delete thread and messages |
 | `POST` | `/api/threads/:id/messages` | send a turn, SSE stream back |
 | `POST` | `/api/threads/:id/messages/:msgId/retry` | replay a failed tail turn, SSE stream back |
@@ -900,6 +973,7 @@ large document, a cache hit shows up as a dramatically lower TTFT on later turns
 | `GET` | `/grimoire-graphs` | the graph view |
 | `GET` `POST` | `/api/graphs` | list / create a graph |
 | `GET` `PATCH` `DELETE` | `/api/graphs/:id` | one canvas (points + lines) / rename / delete |
+| `POST` | `/api/graphs/:id/suggest-title` | a proposed name, read from the points on the canvas. Returns `{ title, model, current }` and writes nothing |
 | `GET` | `/api/graph-library` | books and conversations a point can be seeded from, each with the graphs it already stands on |
 | `GET` | `/api/graph-atlas` | every graph, what each stands on, and what any two of them share |
 | `GET` | `/api/graph-usage?document=\|thread=` | which graphs carry one exact book or conversation |
@@ -920,7 +994,7 @@ map-reduce split for a source that overflows it, the traces, the fallback chain
 — is the same code.
 
 The deck reads and writes through the lab's own endpoints — `/api/documents`
-(upload, replace, rename, remove), `/versions` (list, file, remove), `/diff`,
+(upload, replace, rename, remove), `/versions` (list, file, remove, restore), `/diff`,
 `/api/rewrite`, `/api/threads/:id`, `/api/traces` — so the two views can never
 drift apart, and neither can grow a rule the other does not enforce.
 

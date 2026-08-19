@@ -8,7 +8,7 @@
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><text y='14' font-size='14'>⚡</text></svg>" />
 </head>
 <body>
-  <aside class="sidebar">
+  <aside id="sidebar" class="sidebar">
     <div class="brand"><span class="brandMark">⚡</span> Spark Doc Lab</div>
 
     <div class="newThread">
@@ -38,8 +38,16 @@
     <div id="dbStats" class="dbStats"></div>
   </aside>
 
+  <!-- Tapping the page behind an open drawer closes it, the way every phone
+       app behaves. Inert and invisible until the drawer is out. -->
+  <div id="navScrim" class="navScrim" hidden></div>
+
   <main class="main">
     <header class="topbar">
+      <!-- Phone only: the sidebar is off-canvas there, so it needs a handle.
+           Hidden at desktop widths, where the sidebar is simply always open. -->
+      <button id="menuBtn" class="navBtn" aria-label="Show documents and threads"
+              aria-controls="sidebar" aria-expanded="false">☰</button>
       <div class="titleWrap">
         <span id="threadTitle" class="threadTitle">No thread open</span>
         <span id="threadDoc" class="threadDoc"></span>
@@ -247,7 +255,11 @@
       <div class="confirmBody">
         <label id="promptLbl" class="confirmLbl" for="promptInput">Name</label>
         <input id="promptInput" type="text" class="promptInput" autocomplete="off" spellcheck="false" />
+        <p id="promptHint" class="promptHint hidden"></p>
         <div class="confirmActions">
+          <button id="suggestPrompt" class="small hidden"
+                  title="Let the model read this and propose a name — nothing is saved until you keep it">✦ Suggest a name</button>
+          <span class="spacer"></span>
           <button id="cancelPrompt" class="dismiss">Cancel</button>
           <button id="confirmPrompt" class="primary">Save</button>
         </div>

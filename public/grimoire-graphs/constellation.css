@@ -124,6 +124,11 @@
   overflow: hidden;
   cursor: grab;
   transition: right .3s ease;
+  /* Pan, card drag and the pinch below are all driven by pointer/touch events.
+     Without this the browser claims the gesture first and scrolls or zooms the
+     page instead, which on a touch screen means the canvas cannot be moved at
+     all. */
+  touch-action: none;
 }
 .constel .canvas.panning { cursor: grabbing; }
 .constel.inspecting .canvas { right: var(--inspW); }
@@ -460,6 +465,25 @@
   padding: 2px 6px; cursor: pointer;
 }
 .constel .turnAct:hover { background: rgba(111, 230, 255, .16); }
+.constel .turnAct.on { color: var(--amber); border-color: rgba(255, 180, 84, .45); }
+
+/* ------------------------------------------------- where a point begins
+
+   The turns above the mark are still the conversation — they are shown, they
+   are copyable, they still branch. They have only stopped being sent, so they
+   are dimmed rather than dropped. */
+
+.constel .turn.preStart { opacity: .38; }
+.constel .turn.preStart:hover { opacity: .78; }
+.constel .turn.startsHere .who { color: var(--amber); }
+
+.constel .startMark {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: var(--s2); flex-wrap: wrap;
+  margin: var(--s2) 0; padding-top: var(--s2);
+  border-top: 1px dashed rgba(255, 180, 84, .35);
+  font-family: var(--mono); font-size: 9px; letter-spacing: .12em; color: var(--amber);
+}
 
 .constel .caret { display: inline-block; width: 7px; background: var(--cyan); animation: cn-caret 1s steps(1) infinite; }
 @keyframes cn-caret { 50% { opacity: 0; } }
@@ -573,10 +597,13 @@
 .constel .modalInput:focus { border-color: var(--cyan); box-shadow: inset 0 0 18px rgba(111, 230, 255, .1); }
 .constel .modalErr { margin: 0; min-height: 14px; font-family: var(--mono); font-size: 10px; color: var(--alert); }
 .constel .modalActs {
-  display: flex; justify-content: flex-end; gap: var(--s2);
+  display: flex; align-items: center; justify-content: flex-end; gap: var(--s2);
   padding: var(--s3) var(--s4);
   border-top: 1px solid var(--edgeSoft);
 }
+/* Pushes SUGGEST to the leading edge: proposing a name is not a confirmation,
+   and it must not sit in the row of buttons that commit. */
+.constel .modalSpacer { flex: 1; }
 
 /* ------------------------------------------------------------- pick lists */
 
@@ -660,6 +687,17 @@
 }
 .constel .atlasHold.doc { color: var(--amber); border-color: rgba(255, 180, 84, .22); }
 
+/* A hold is a chip, and its rename is a hairline on the chip — visible on
+   hover so the shelf reads as names first and controls second. */
+.constel .holdRename {
+  margin-left: 5px; padding: 0 2px;
+  background: none; border: none; color: var(--dim);
+  font: inherit; line-height: 1; cursor: pointer; opacity: 0;
+  transition: opacity .12s ease, color .12s ease;
+}
+.constel .atlasHold:hover .holdRename, .constel .holdRename:focus-visible { opacity: 1; }
+.constel .holdRename:hover { color: var(--cyan); }
+
 .constel .atlasShare {
   display: flex; flex-wrap: wrap; align-items: center; gap: 4px; margin-top: var(--s2);
   font-family: var(--mono); font-size: 9px; letter-spacing: .12em; color: var(--dim);
@@ -739,3 +777,130 @@
 .constel .nodeMeta.attached { color: var(--amber); }
 .constel .srcRow.idle .srcName { color: var(--dim); }
 .constel .srcRow.idle .srcSize { color: var(--dim); font-style: italic; }
+
+/* ===========================================================================
+   Tablet and narrow laptop (≤1100px)
+
+   Two things stop fitting before the phone layout is called for: the bar's
+   eleven controls, and a 460px inspector taken out of a 900px canvas. Neither
+   is a reason to restructure the view — the bar scrolls, and the inspector
+   takes a share of the width rather than a fixed slab of it.
+   =========================================================================== */
+
+@media (max-width: 1100px) {
+  .constel { --inspW: 46vw; }
+  .constel .graphPick, .constel .barRight { min-width: 0; overflow-x: auto; scrollbar-width: none; }
+  .constel .graphPick::-webkit-scrollbar,
+  .constel .barRight::-webkit-scrollbar { display: none; }
+  .constel .graphPick > *, .constel .barRight > * { flex: none; }
+  .constel .graphPick { flex: 1 1 160px; }
+  .constel .barRight { flex: 0 1 auto; }
+  /* Sits under the readout in this band rather than beside it. */
+  .constel .canvasHint { display: none; }
+}
+
+/* ===========================================================================
+   Phone (≤720px)
+
+   The canvas is the one view here that already worked at any size — it pans and
+   zooms, so it does not care how much of it you can see at once. What does not
+   survive a narrow screen is everything pinned around it: a 460px inspector
+   down the right, a bar of eleven controls across the top, and two readouts in
+   the corners of a screen that has no spare corners.
+
+   So the inspector becomes a bottom sheet over the canvas rather than a column
+   beside it, the bar splits into two scrolling rows, and the readouts go.
+   =========================================================================== */
+
+@media (max-width: 720px) {
+  .constel {
+    --nodeW: 240px;
+    /* The inspector no longer takes width from the canvas, so every rule that
+       reserves --inspW on the right reserves nothing. */
+    --inspW: 0px;
+  }
+
+  .constel .bar {
+    top: 8px; left: 8px; right: 8px;
+    height: auto; flex-wrap: wrap;
+    gap: var(--s2); padding: var(--s2);
+  }
+  .constel .ident { display: none; }
+  /* DECK stays on the first row beside the graph picker rather than taking a
+     row of its own — a three-row bar is a quarter of the canvas. */
+  .constel .back { flex: none; }
+  /* Both control groups keep their real size and scroll sideways: shrinking
+     eleven buttons to fit would leave eleven unreadable ones. */
+  .constel .graphPick { flex: 1 1 120px; min-width: 0; }
+  .constel .barRight { flex: 1 0 100%; }
+  .constel .graphPick,
+  .constel .barRight {
+    overflow-x: auto; overflow-y: hidden;
+    padding-bottom: 2px;
+    scrollbar-width: none; -webkit-overflow-scrolling: touch;
+  }
+  .constel .graphPick::-webkit-scrollbar,
+  .constel .barRight::-webkit-scrollbar { display: none; }
+  .constel .graphPick > *, .constel .barRight > * { flex: none; }
+  .constel .graphPick .hudSelect { flex: 0 0 180px; max-width: 180px; }
+
+  .constel .canvas { inset: 96px 0 0 0; }
+  .constel.inspecting .canvas { right: 0; }
+
+  /* The two lines of small caps in the corners describe a mouse the device does
+     not have, and sit on top of the cards either way. */
+  .constel .readout, .constel .canvasHint { display: none; }
+
+  /* --- the inspector, as a bottom sheet ---------------------------------- */
+
+  .constel .inspector {
+    top: auto; left: 0; right: 0; bottom: 0;
+    width: auto; height: 66dvh;
+    border: 0; border-top: 2px solid var(--cyan);
+    padding-bottom: env(safe-area-inset-bottom);
+  }
+  @keyframes cn-slideUp { from { opacity: 0; transform: translateY(24px); } to { opacity: 1; transform: none; } }
+  .constel .inspector { animation: cn-slideUp .25s cubic-bezier(.22, .8, .3, 1); }
+  .constel .inspTop { flex-wrap: wrap; }
+  .constel .inspIdent { flex: 1 0 100%; order: -1; }
+  .constel .inspSub { display: none; }
+  .constel .sources { max-height: 22dvh; }
+  .constel .srcRow { flex-wrap: wrap; }
+  /* The mode picker takes a line of its own — but `order` puts it *after* the
+     row's buttons, so the ✕ stays up beside the name it removes instead of
+     being pushed down onto a third line by itself. */
+  .constel .srcMode, .constel .srcModeSel { order: 1; flex: 1 1 100%; max-width: none; }
+  .constel .inspLog { padding: var(--s2); }
+  .constel .composer { padding: var(--s2); }
+  /* The field and SEND still share a line — they fit. What does not fit is the
+     pair of pickers above them at their desktop cap, so they share the row
+     evenly instead of the second one being clipped. */
+  .constel .composerRow { flex-wrap: wrap; }
+  .constel .composer .hudSelect { flex: 1 1 90px; min-width: 0; max-width: none; }
+  .constel .composerStage { flex: 1 1 100%; text-align: left; }
+
+  /* --- everything raised over the canvas ---------------------------------- */
+
+  .constel .modalBox { width: calc(100vw - 16px); }
+  .constel .sheetBox { width: calc(100vw - 16px); height: 88dvh; }
+  .constel .modalTop, .constel .modalBody,
+  .constel .modalActs, .constel .sheetBody { padding: var(--s3); }
+  .constel .modalActs { flex-wrap: wrap; }
+  .constel .modalActs .hudBtn { flex: 1; justify-content: center; }
+  .constel .pickRow { flex-wrap: wrap; }
+  .constel .srcModeSel { flex: 1 1 100%; }
+
+  .constel .snacks { left: 50%; bottom: calc(16px + env(safe-area-inset-bottom)); width: calc(100vw - 24px); }
+  .constel.inspecting .snacks { left: 50%; }
+  .constel .snack { max-width: 100%; }
+
+  .constel .seedWhat { max-width: none; padding: 0 var(--s4); }
+  .constel .seedActs { flex-direction: column; align-items: stretch; padding: 0 var(--s4); }
+  .constel .atlasTop, .constel .docActs { flex-wrap: wrap; }
+}
+
+/* A card's own controls are large enough to tap, but a 14px port that only
+   appears on hover is not. Both ports stay visible where there is no pointer. */
+@media (hover: none) {
+  .constel .port.out { transform: scale(1.25); }
+}

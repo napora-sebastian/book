@@ -82,3 +82,29 @@
 
 /* The deck keeps running behind — it just stops taking the keyboard. */
 body.graphOpen { overflow: hidden; }
+
+/* ---------------------------------------------------------------- phone
+
+   Inset panes are a wide-screen luxury: 20px of margin either side of a 390px
+   viewport is 10% of the canvas spent proving that the deck is still back
+   there. The pane goes edge to edge, and the canvas chrome tucks in against
+   the screen instead of against the pane.
+
+   These rules have to be written here and not in constellation.css: the
+   embedded positions above are `.graphStage .constel .bar`, which outranks the
+   component's own `.constel .bar` whatever order the two files load in.
+   ------------------------------------------------------------------------- */
+
+@media (max-width: 720px) {
+  .graphStage { margin: 0; border: 0; border-radius: 0; }
+  /* Corner brackets 8px inside an edge-to-edge pane would cut across the bar. */
+  .graphStage::after { display: none; }
+
+  .graphStage .constel .bar { top: 8px; left: 8px; right: 8px; }
+  .graphStage .constel .canvas { top: 96px; }
+  .graphStage .constel .inspector {
+    top: auto; left: 0; right: 0; bottom: 0;
+  }
+  .graphStage .constel .readout { left: 8px; bottom: 8px; }
+  .graphStage .constel .canvasHint { bottom: 8px; right: 8px; }
+}

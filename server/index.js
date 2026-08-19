@@ -20,6 +20,7 @@ import * as llm from './llm.js';
 import * as db from './db.js';
 import { llmSettings } from './llm-settings.js';
 import { threadSource as attachedThreadSource, sourceSummary } from './sources.js';
+import { threadTitlePrompt, suggestTitle } from './naming.js';
 import { mountOracle } from './oracle.js';
 import { mountGraph } from './graph.js';
 
@@ -325,6 +326,48 @@ app.delete('/api/documents/:id/versions/:version', (req, res) => {
 });
 
 /**
+ * Make an older version the document's live content again.
+ *
+ * The version rail records what a document has been; it did not, until now, let
+ * you go back to any of it. A saved draft that reads better than what is in the
+ * slot was a download, a hand-edit and a re-upload away from being current.
+ *
+ * Nothing is rewound: the restored text is filed forward as the newest version,
+ * carrying `restored_from`, so the drafts made after it survive the decision and
+ * can be restored in turn. Every thread and every point reading this document
+ * answers from the restored text on its next turn.
+ */
+app.post('/api/documents/:id/versions/:version/restore', (req, res) => {
+  const id = Number(req.params.id);
+  if (!db.getDocument(id)) return res.status(404).json({ error: 'No such document.' });
+
+  const version = Number(req.params.version);
+  if (!Number.isInteger(version) || version < 1) {
+    return res.status(400).json({ error: 'version must be a positive integer.' });
+  }
+
+  let result;
+  try {
+    result = db.restoreDocumentVersion(id, version);
+  } catch (err) {
+    if (String(err.message).includes('UNIQUE constraint failed')) {
+      return res.status(409).json({ error: 'This exact content already exists as another document in the library.' });
+    }
+    throw err;
+  }
+  if (!result) return res.status(404).json({ error: `No version ${version}.` });
+
+  res.json({
+    ...withoutText(result.doc),
+    version: result.version,
+    restoredFrom: result.restoredFrom,
+    identical: result.identical,
+    additions: result.additions,
+    deletions: result.deletions,
+  });
+});
+
+/**
  * Unified diff between two versions of one document, GitHub-style: `from`
  * defaults to the version before `to`, and `to` defaults to the newest.
  */
@@ -473,6 +516,26 @@ app.patch('/api/threads/:id', (req, res) => {
   if (req.body?.title) db.renameThread(id, req.body.title);
   if (req.body?.model) db.setThreadModel(id, req.body.model);
 
+  // Where the model is told the conversation begins. `null` clears the mark and
+  // sends the whole thing again; presence of the key is what counts, so a
+  // caller can distinguish "leave it alone" from "send everything".
+  if ('contextFromMessageId' in (req.body || {})) {
+    const messageId = req.body.contextFromMessageId;
+    if (messageId != null) {
+      const message = db.getMessage(Number(messageId));
+      if (!message || message.thread_id !== id) {
+        return res.status(400).json({ error: 'That message is not in this conversation.' });
+      }
+      // Starting at the first message is starting at the beginning. Storing a
+      // mark for it would be a mark that excludes nothing — and every view
+      // would then have to draw a cut with no turns above it.
+      const first = db.getMessages(id)[0];
+      db.setThreadContextStart(id, message.id === first?.id ? null : message.id);
+    } else {
+      db.setThreadContextStart(id, null);
+    }
+  }
+
   // `documentId: null` detaches, so presence of the key is what counts here.
   if ('documentId' in (req.body || {})) {
     const documentId = req.body.documentId;
@@ -487,6 +550,35 @@ app.patch('/api/threads/:id', (req, res) => {
 app.delete('/api/threads/:id', (req, res) => {
   res.json({ deleted: db.deleteThread(Number(req.params.id)) });
 });
+
+/**
+ * What this conversation could be called, read from what is actually in it.
+ *
+ * A suggestion and nothing more: the title is returned, never written. The
+ * caller shows it, and the rename it already has does the writing if the user
+ * keeps it. That split is the whole point — the model never renames anything
+ * behind the user's back.
+ */
+app.post('/api/threads/:id/suggest-title', asyncRoute(async (req, res) => {
+  const built = threadTitlePrompt(Number(req.params.id));
+  if (!built) return res.status(404).json({ error: 'No such thread.' });
+
+  const model = req.body?.model || llm.config().model;
+  try {
+    const out = await suggestTitle(built.messages, { model });
+    trace(traceRow({
+      threadId: built.subject.id, kind: 'chat', task: 'title', model,
+      result: out.result, messages: built.messages,
+    }));
+    res.json({ title: out.title, model: out.model, current: built.subject.title });
+  } catch (err) {
+    trace(traceRow({
+      threadId: built.subject.id, kind: 'chat', task: 'title', model,
+      messages: built.messages, status: 'error', error: err.message,
+    }));
+    res.status(502).json({ error: err.message });
+  }
+}));
 
 /* --------------------------------------------------------- saved responses */
 
@@ -935,7 +1027,9 @@ app.post('/api/threads/:id/messages', asyncRoute(async (req, res) => {
 
   // Persist the user turn before inference, so a crash mid-answer still leaves
   // the question in the thread rather than losing it.
-  const history = db.getMessages(threadId).map((m) => ({ role: m.role, content: m.content }));
+  // Only from the message the user marked as the start — everything above it
+  // stays in the transcript and stops being paid for.
+  const history = db.contextMessages(threadId).map((m) => ({ role: m.role, content: m.content }));
   const userMsg = db.addMessage({ threadId, role: 'user', content: question, task: taskId });
 
   // First user message names the thread.
@@ -993,7 +1087,8 @@ app.post('/api/threads/:id/messages/:messageId/retry', asyncRoute(async (req, re
   await streamTurn(res, {
     threadId,
     userMsg,
-    history: messages.slice(0, userIdx).map((m) => ({ role: m.role, content: m.content })),
+    history: messages.slice(db.contextStartIndex(threadId, messages), userIdx)
+      .map((m) => ({ role: m.role, content: m.content })),
     taskId: userMsg.task || 'chat',
     chosenModel,
     source: attachedThreadSource(threadId),
@@ -1033,7 +1128,8 @@ app.post('/api/threads/:id/messages/:messageId/edit', asyncRoute(async (req, res
   await streamTurn(res, {
     threadId,
     userMsg,
-    history: messages.slice(0, idx).map((m) => ({ role: m.role, content: m.content })),
+    history: messages.slice(db.contextStartIndex(threadId, messages), idx)
+      .map((m) => ({ role: m.role, content: m.content })),
     taskId: userMsg.task || 'chat',
     chosenModel,
     source: attachedThreadSource(threadId),

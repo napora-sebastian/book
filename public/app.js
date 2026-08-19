@@ -4,6 +4,7 @@ const el = {
   renameDoc: $('renameDoc'), docMeta: $('docMeta'), threads: $('threads'), dbStats: $('dbStats'),
   threadTitle: $('threadTitle'), threadDoc: $('threadDoc'), model: $('model'),
   renameThread: $('renameThread'), deleteThread: $('deleteThread'), status: $('status'),
+  suggestPrompt: $('suggestPrompt'), promptHint: $('promptHint'),
   transcript: $('transcript'), stage: $('stage'), composer: $('composer'),
   task: $('task'), input: $('input'), send: $('send'), stop: $('stop'),
   threadUsage: $('threadUsage'), traces: $('traces'), overlay: $('overlay'),
@@ -44,6 +45,7 @@ const el = {
   versionRemoveConfirm: $('versionRemoveConfirm'), versionRemoveError: $('versionRemoveError'),
   confirmVersionRemove: $('confirmVersionRemove'), cancelVersionRemove: $('cancelVersionRemove'),
   closeVersionRemoveSheet: $('closeVersionRemoveSheet'),
+  sidebar: $('sidebar'), menuBtn: $('menuBtn'), navScrim: $('navScrim'),
 };
 
 const fmtTok = (n) => (n == null ? '—' : n.toLocaleString());
@@ -52,6 +54,9 @@ let cfg = null;
 let currentThreadId = null;
 let controller = null;
 let docCache = [];
+// Which message the open thread is treated as beginning at, or null for all of
+// it. Held here so the transcript can mark the cut without a second request.
+let contextFrom = null;
 
 const api = async (url, opts) => {
   const res = await fetch(url, opts);
@@ -135,13 +140,26 @@ function showSnackbar(message, type = 'success', action = null) {
  * Both follow the app's modal convention: they close through their own buttons
  * only, never on Esc or a backdrop click.
  */
-function askText({ title, label, value = '', confirmLabel = 'Save' }) {
+/**
+ * One text prompt for every rename in the deck.
+ *
+ * `suggest` is what makes it more than a text box: given an async function
+ * that returns a proposed name, the dialog grows a button that asks the model
+ * and drops the answer into the field. The field stays editable and nothing is
+ * written until the user confirms — a suggestion is offered, never applied.
+ */
+function askText({ title, label, value = '', confirmLabel = 'Save', suggest = null }) {
   return new Promise((resolve) => {
     el.promptTitle.textContent = title;
     el.promptLbl.textContent = label;
     el.confirmPrompt.textContent = confirmLabel;
     el.promptInput.value = value;
     el.confirmPrompt.disabled = !value.trim();
+    el.promptHint.textContent = '';
+    el.promptHint.classList.add('hidden');
+    el.suggestPrompt.classList.toggle('hidden', !suggest);
+    el.suggestPrompt.disabled = false;
+    el.suggestPrompt.textContent = '✦ Suggest a name';
     el.promptOverlay.classList.remove('hidden');
     el.promptInput.focus();
     el.promptInput.select();
@@ -153,6 +171,7 @@ function askText({ title, label, value = '', confirmLabel = 'Save' }) {
       el.closePromptSheet.removeEventListener('click', no);
       el.promptInput.removeEventListener('keydown', key);
       el.promptInput.removeEventListener('input', typed);
+      el.suggestPrompt.removeEventListener('click', ask);
       resolve(result);
     };
     const ok = () => { const v = el.promptInput.value.trim(); if (v) done(v); };
@@ -160,12 +179,79 @@ function askText({ title, label, value = '', confirmLabel = 'Save' }) {
     const key = (e) => { if (e.key === 'Enter') { e.preventDefault(); ok(); } };
     const typed = () => { el.confirmPrompt.disabled = !el.promptInput.value.trim(); };
 
+    const ask = async () => {
+      el.suggestPrompt.disabled = true;
+      el.suggestPrompt.textContent = '✦ Reading…';
+      el.promptHint.classList.remove('hidden');
+      el.promptHint.textContent = 'Reading what is in it…';
+      try {
+        const proposed = await suggest();
+        el.promptInput.value = proposed;
+        el.promptInput.focus();
+        el.promptInput.select();
+        el.confirmPrompt.disabled = false;
+        el.promptHint.textContent = 'Suggested — edit it, keep it, or cancel to leave the name alone.';
+      } catch (err) {
+        el.promptHint.textContent = `Could not suggest a name — ${err.message}`;
+      } finally {
+        el.suggestPrompt.disabled = false;
+        el.suggestPrompt.textContent = '✦ Suggest another';
+      }
+    };
+
     el.confirmPrompt.addEventListener('click', ok);
     el.cancelPrompt.addEventListener('click', no);
     el.closePromptSheet.addEventListener('click', no);
     el.promptInput.addEventListener('keydown', key);
     el.promptInput.addEventListener('input', typed);
+    el.suggestPrompt.addEventListener('click', ask);
   });
+}
+
+/** Ask the model what a conversation or a graph should be called. */
+const suggestNameFor = (kind, id) => async () => {
+  const { title } = await jsonPost(`/api/${kind}/${id}/suggest-title`, {});
+  return title;
+};
+
+/**
+ * Rename a conversation from anywhere it is listed — the header, the sidebar,
+ * the source picker. One function so the model-suggestion path exists in every
+ * one of those places rather than only the one that happened to have a button.
+ */
+async function renameThread(id, current) {
+  const title = await askText({
+    title: 'Rename conversation',
+    label: 'Conversation title',
+    value: current ?? '',
+    confirmLabel: 'Rename',
+    suggest: suggestNameFor('threads', id),
+  });
+  if (!title || title === current) return null;
+  try {
+    await jsonPost(`/api/threads/${id}`, { title }, 'PATCH');
+    if (id === currentThreadId) el.threadTitle.textContent = title;
+    await refreshThreads();
+    showSnackbar('Conversation renamed');
+    return title;
+  } catch (err) { showSnackbar(err.message, 'error'); return null; }
+}
+
+/** The same for a graph — the deck lists them in the source picker. */
+async function renameGraph(id, current) {
+  const title = await askText({
+    title: 'Rename graph',
+    label: 'Graph name',
+    value: current ?? '',
+    confirmLabel: 'Rename',
+    suggest: suggestNameFor('graphs', id),
+  });
+  if (!title || title === current) return null;
+  try {
+    await jsonPost(`/api/graphs/${id}`, { title }, 'PATCH');
+    showSnackbar('Graph renamed');
+    return title;
+  } catch (err) { showSnackbar(err.message, 'error'); return null; }
 }
 
 function askConfirm({ title, body, confirmLabel = 'Delete', destructive = true }) {
@@ -450,9 +536,12 @@ async function loadVersions({ focus = 'newest' } = {}) {
   const newest = versions[0].version;
   el.versionList.innerHTML = versions.map((v) => `
     <div class="versionRow${v.version === newest ? ' active' : ''}" data-version="${v.version}">
-      <div class="v">v${v.version}${v.version === newest ? '<span class="tag">current</span>' : ''}</div>
+      <div class="v">v${v.version}${v.version === newest ? '<span class="tag">current</span>' : ''}${
+        v.restored_from ? `<span class="tag">from v${v.restored_from}</span>` : ''}</div>
       <div class="s">${versionStat(v)}</div>
       <div class="s">${v.pages ? `${v.pages}p · ` : ''}${(v.words ?? 0).toLocaleString()} words · ${fmtWhen(v.created_at)}</div>
+      ${v.version === newest ? '' : `<button class="versionRestore" title="Make v${v.version} the current text"
+        aria-label="Make version v${v.version} the current text" data-version="${v.version}">⤒</button>`}
       <button class="versionTrash" title="Remove version v${v.version}" aria-label="Remove version v${v.version}" data-version="${v.version}">🗑</button>
     </div>`).join('');
 
@@ -460,7 +549,7 @@ async function loadVersions({ focus = 'newest' } = {}) {
     // Picking a version shows what that save changed — the diff against the
     // one before it, which is the question anyone clicking a history asks.
     row.addEventListener('click', (e) => {
-      if (e.target.closest('.versionTrash')) return;
+      if (e.target.closest('.versionTrash') || e.target.closest('.versionRestore')) return;
       const v = Number(row.dataset.version);
       el.diffTo.value = String(v);
       el.diffFrom.value = String(v - 1);
@@ -475,6 +564,13 @@ async function loadVersions({ focus = 'newest' } = {}) {
     });
   });
 
+  el.versionList.querySelectorAll('.versionRestore').forEach((btn) => {
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      restoreVersion(Number(btn.dataset.version));
+    });
+  });
+
   const label = (v) => `v${v.version} · ${fmtWhen(v.created_at)}`;
   const options = versions.map((v) => `<option value="${v.version}">${label(v)}</option>`).join('');
   el.diffFrom.innerHTML = options + '<option value="0">nothing (before the first version)</option>';
@@ -486,6 +582,44 @@ async function loadVersions({ focus = 'newest' } = {}) {
   el.diffFrom.value = keep ? held.from : String(newest - 1);
 
   await loadDiff();
+}
+
+/**
+ * Put an older version back in the document's slot.
+ *
+ * Until now the rail could only be read: a draft that turned out to be the
+ * better one had to be downloaded, pasted into the editor and saved again. This
+ * is that round trip as one button, and it is not a rewind — the restored text
+ * is filed forward as the newest version, so the drafts made after it are still
+ * on the rail and can be restored in their turn.
+ */
+async function restoreVersion(version) {
+  const docId = versionsDocId;
+  if (docId == null) return;
+
+  const newest = versionsCache[0]?.version ?? version;
+  const ok = await askConfirm({
+    title: `Make v${version} the current text?`,
+    body: `Every thread reading this document is answered from it from now on. `
+      + `Nothing is lost — v${version} is filed forward as v${newest + 1}, and v${newest} stays on the rail.`,
+    confirmLabel: 'Make current',
+    destructive: false,
+  });
+  if (!ok) return;
+
+  try {
+    const out = await api(`/api/documents/${docId}/versions/${version}/restore`, { method: 'POST' });
+    await loadVersions({ focus: 'newest' });
+    await refreshDocuments();
+    // The preview behind this modal still holds the text as it was, and the
+    // way back to it is one click — so it has to be re-read, not remembered.
+    if (previewDocId === docId) previewDocId = null;
+    showSnackbar(out.identical
+      ? `v${version} was already the current text — filed as v${out.version}`
+      : `v${version} restored as v${out.version} · +${out.additions} −${out.deletions}`);
+  } catch (err) {
+    showSnackbar(err.message, 'error');
+  }
 }
 
 /**
@@ -1325,20 +1459,60 @@ function renderSplitDiff({ filename, additions, deletions, truncated, hunks, emp
     </div>`;
 }
 
+/* ---------------------------------------------------------------- the drawer
+
+   On a phone the sidebar is off-canvas: the document picker and the thread list
+   are a drawer over the transcript rather than a column beside it. Everything
+   below is inert at desktop widths — the class it toggles only means anything
+   inside the phone media query, so the same markup serves both.
+   -------------------------------------------------------------------------- */
+
+function setNav(open) {
+  document.body.classList.toggle('navOpen', open);
+  el.menuBtn.setAttribute('aria-expanded', String(open));
+  el.navScrim.hidden = !open;
+}
+const closeNav = () => setNav(false);
+
+el.menuBtn.addEventListener('click', () => setNav(!document.body.classList.contains('navOpen')));
+el.navScrim.addEventListener('click', closeNav);
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && document.body.classList.contains('navOpen')) closeNav();
+});
+// A drawer that stays out after it has been used is a drawer covering the thing
+// you opened, so any choice made inside it closes it.
+el.sidebar.addEventListener('click', (e) => {
+  if (e.target.closest('.thread, #newThread')) closeNav();
+});
+// Coming back to a wide window with the drawer state still set would leave the
+// scrim over a sidebar that is no longer a drawer.
+matchMedia('(min-width: 721px)').addEventListener('change', (e) => { if (e.matches) closeNav(); });
+
 /* ------------------------------------------------------------------- threads */
 
 async function refreshThreads() {
   const threads = await api('/api/threads');
   el.threads.innerHTML = threads.length
     ? threads.map((t) => `
-        <div class="thread${t.id === currentThreadId ? ' active' : ''}" data-id="${t.id}">
-          <div class="t">${escapeHtml(t.title)}</div>
+        <div class="thread${t.id === currentThreadId ? ' active' : ''}" data-id="${t.id}" data-title="${escapeHtml(t.title)}">
+          <div class="tRow">
+            <div class="t">${escapeHtml(t.title)}</div>
+            <button class="rowRename" data-rename="${t.id}" title="Rename this conversation">✎</button>
+          </div>
           <div class="s">${t.filename ? escapeHtml(t.filename) + ' · ' : ''}${t.message_count} msg · ${fmtWhen(t.updated_at)}</div>
         </div>`).join('')
     : '<div class="none">No threads yet.</div>';
 
   el.threads.querySelectorAll('.thread').forEach((node) =>
-    node.addEventListener('click', () => openThread(Number(node.dataset.id))));
+    node.addEventListener('click', (ev) => {
+      // The pencil renames in place; it must not also open the thread.
+      const rename = ev.target.closest('[data-rename]');
+      if (rename) {
+        ev.stopPropagation();
+        return void renameThread(Number(rename.dataset.rename), node.dataset.title);
+      }
+      openThread(Number(node.dataset.id));
+    }));
 }
 
 el.newThread.addEventListener('click', async () => {
@@ -1368,8 +1542,11 @@ async function openThread(id) {
   const byMsg = new Map((usage?.perMessage ?? []).map((u) => [u.message_id, u]));
   renderThreadUsage(usage?.thread);
 
+  contextFrom = thread.context_from_message_id ?? null;
+
   el.transcript.innerHTML = '';
   const nodes = messages.map((m) => renderMessage(m, byMsg.get(m.id)));
+  paintContextStart(messages);
 
   // A turn that never produced a clean answer — an error, a stop, or a question
   // whose reply never arrived — offers a retry on the last bubble.
@@ -1385,22 +1562,8 @@ async function openThread(id) {
   refreshSourceCount(thread.source_count ?? 0);
 }
 
-el.renameThread.addEventListener('click', async () => {
-  const title = await askText({
-    title: 'Rename thread',
-    label: 'Thread title',
-    value: el.threadTitle.textContent,
-    confirmLabel: 'Rename',
-  });
-  if (!title) return;
-
-  try {
-    await jsonPost(`/api/threads/${currentThreadId}`, { title }, 'PATCH');
-    el.threadTitle.textContent = title;
-    await refreshThreads();
-  } catch (err) {
-    showSnackbar(err.message, 'error');
-  }
+el.renameThread.addEventListener('click', () => {
+  if (currentThreadId) renameThread(currentThreadId, el.threadTitle.textContent);
 });
 
 el.deleteThread.addEventListener('click', async () => {
@@ -1497,6 +1660,53 @@ function renderMessage(m, usage) {
 
 const scrollDown = () => { el.transcript.scrollTop = el.transcript.scrollHeight; };
 
+/* ------------------------------------------------------- where a thread starts
+
+   A long thread carries its own beginning into every later question: the turns
+   that settled chapter one are re-sent, and re-read, while asking about chapter
+   nine. Marking a message as the start cuts that off. Nothing is deleted — the
+   transcript keeps all of it, and it stays copyable, exportable and searchable.
+   Only the prompt gets shorter.
+   -------------------------------------------------------------------------- */
+
+/** Grey out what is no longer sent, and say so at the line where it resumes. */
+function paintContextStart(messages) {
+  el.transcript.querySelector('.startMark')?.remove();
+  el.transcript.querySelectorAll('.msg').forEach((n) => n.classList.remove('preStart', 'startsHere'));
+  if (contextFrom == null) return;
+
+  const at = messages.findIndex((m) => m.id === contextFrom);
+  if (at <= 0) return;
+
+  for (const m of messages.slice(0, at)) {
+    el.transcript.querySelector(`.msg[data-id="${m.id}"]`)?.classList.add('preStart');
+  }
+  const here = el.transcript.querySelector(`.msg[data-id="${contextFrom}"]`);
+  if (!here) return;
+  here.classList.add('startsHere');
+
+  const mark = document.createElement('div');
+  mark.className = 'startMark';
+  const label = document.createElement('span');
+  label.textContent = `The model reads the thread from here — ${at} earlier message${
+    at === 1 ? ' is' : 's are'} kept but not sent`;
+  const undo = actBtn('↺ Send all of it again', 'Clear the start mark', () => setContextStart(null));
+  mark.append(label, undo);
+  here.before(mark);
+}
+
+/** Move, or clear, where this thread begins for the model. */
+async function setContextStart(messageId) {
+  if (!currentThreadId) return;
+  try {
+    await jsonPost(`/api/threads/${currentThreadId}`, { contextFromMessageId: messageId }, 'PATCH');
+    await openThread(currentThreadId);
+    showSnackbar(messageId == null
+      ? 'The whole conversation is sent again'
+      : 'Everything above that message stays in the thread but is no longer sent');
+  } catch (err) { showSnackbar(err.message, 'error'); }
+}
+
 /* ----------------------------------------------------------- message actions */
 
 const actBtn = (label, title, onClick) => {
@@ -1520,6 +1730,19 @@ function messageActions(wrap, m) {
     setTimeout(() => { copy.textContent = '⧉ Copy'; }, 1200);
   });
   acts.appendChild(copy);
+
+  // Every message can be made the beginning — a question or an answer, since
+  // the useful cut is often "keep the draft you produced, drop the argument".
+  if (m.id === contextFrom) {
+    const here = actBtn('⇤ Sending from here',
+      'The model reads the thread from this message — click to send all of it again',
+      () => setContextStart(null));
+    here.classList.add('startsHere');
+    acts.appendChild(here);
+  } else {
+    acts.appendChild(actBtn('⇤ Start here',
+      'Send the model this message onward, and nothing above it', () => setContextStart(m.id)));
+  }
 
   if (m.role === 'user') {
     acts.appendChild(actBtn('✎ Edit', 'Edit and re-run from here', () => beginEdit(wrap, m)));
@@ -2161,6 +2384,9 @@ async function openSources() {
   const threads = [...catalog.threads].sort((a, b) => rank('thread', a.id) - rank('thread', b.id));
   const graphs = [...catalog.graphs].sort((a, b) => rank('graph', a.id) - rank('graph', b.id));
 
+  // Every row can be renamed where it is read: the picker is the one list that
+  // shows conversations and graphs side by side, and it is where a name that
+  // no longer describes the work is most obviously wrong.
   const row = (kind, id, name, meta, extra = '') => {
     const cur = on.get(`${kind}:${id}`);
     return `
@@ -2171,6 +2397,9 @@ async function openSources() {
           <span class="sourceMeta">${meta}</span>
         </span>
         ${extra}
+        <button class="rowRename" data-rename-kind="${kind}" data-rename-id="${id}"
+                data-rename-name="${escapeHtml(name)}"
+                title="Rename this ${kind === 'graph' ? 'graph' : 'conversation'}">✎</button>
       </label>`;
   };
 
@@ -2203,6 +2432,23 @@ async function openSources() {
   // Clicking the mode picker must not toggle the row it sits in.
   el.sourceList.querySelectorAll('.sourceMode').forEach((sel) =>
     sel.addEventListener('click', (e) => e.preventDefault()));
+
+  // Nor must the pencil: the row is a <label>, so a plain click would tick it.
+  el.sourceList.querySelectorAll('.rowRename').forEach((btn) =>
+    btn.addEventListener('click', async (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const { renameKind, renameId, renameName } = btn.dataset;
+      const named = renameKind === 'graph'
+        ? await renameGraph(Number(renameId), renameName)
+        : await renameThread(Number(renameId), renameName);
+      // Patch the row in place. Rebuilding the sheet would be simpler and
+      // would silently drop every tick the user has not saved yet.
+      if (named) {
+        btn.dataset.renameName = named;
+        btn.closest('.sourceRow').querySelector('.sourceName').textContent = named;
+      }
+    }));
   el.sourceList.querySelectorAll('.sourceBox').forEach((box) =>
     box.addEventListener('change', () => {
       box.closest('.sourceRow').classList.toggle('on', box.checked);

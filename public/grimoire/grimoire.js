@@ -19,7 +19,7 @@ const el = {
   sheetActs: $('sheetActs'), sheetClose: $('sheetClose'),
   modal: $('modal'), modalTitle: $('modalTitle'), modalWhat: $('modalWhat'),
   modalLabel: $('modalLabel'), modalInput: $('modalInput'), modalErr: $('modalErr'),
-  modalOk: $('modalOk'), modalCancel: $('modalCancel'),
+  modalOk: $('modalOk'), modalCancel: $('modalCancel'), modalSuggest: $('modalSuggest'),
   rewritePop: $('rewritePop'), rewriteInstr: $('rewriteInstr'),
   rewriteGo: $('rewriteGo'), rewriteCancel: $('rewriteCancel'),
   modeToggle: $('modeToggle'),
@@ -264,8 +264,20 @@ function thinkHtml(reasoning) {
 
 function turnsHtml(messages, rec, v) {
   const last = messages[messages.length - 1];
-  return messages.map((m) => (v?.editing?.msgId === m.id ? editTurnHtml(v.editing) : `
-    <article class="turn ${m.role}" data-msg="${m.id}">
+  // Where the model is told this record begins. Everything above it is still
+  // here and still readable — it has only stopped being sent.
+  const cut = rec?.thread?.context_from_message_id ?? null;
+  const cutAt = cut == null ? -1 : messages.findIndex((m) => m.id === cut);
+
+  return messages.map((m, i) => (v?.editing?.msgId === m.id ? editTurnHtml(v.editing) : `
+    ${i === cutAt && cutAt > 0 ? `
+      <div class="startMark">
+        <span>⇤ THE MODEL READS THIS RECORD FROM HERE — ${cutAt} EARLIER MESSAGE${
+          cutAt === 1 ? '' : 'S'} KEPT, NOT SENT</span>
+        <button class="winAct" data-act="startClear" title="Send the whole record again">↺ SEND ALL</button>
+      </div>` : ''}
+    <article class="turn ${m.role}${cutAt > 0 && i < cutAt ? ' preStart' : ''}${
+      m.id === cut ? ' startsHere' : ''}" data-msg="${m.id}">
       <span class="turnWho">${m.role === 'user' ? 'OPERATOR' : esc(m.model || 'MODEL')} · ${fmtWhen(m.created_at)}${
         m.ms ? ` · ${(m.ms / 1000).toFixed(1)}S` : ''
       }</span>
@@ -347,7 +359,19 @@ function liveTurnsHtml(s) {
  * which is the point of it.
  */
 function turnActs(m, rec, last) {
-  const acts = [`<button class="winAct" data-act="copyMsg" data-msg="${m.id}">⧉ COPY</button>`];
+  const here = m.id === (rec?.thread?.context_from_message_id ?? null);
+  const acts = [
+    `<button class="winAct" data-act="copyMsg" data-msg="${m.id}">⧉ COPY</button>`,
+    // A record that has run long carries its own beginning into every later
+    // question. This is where that is cut — on a question or on an answer,
+    // since "keep the draft, drop the argument that produced it" is the usual
+    // shape of it.
+    `<button class="winAct${here ? ' on' : ''}" data-act="${here ? 'startClear' : 'startHere'}" data-msg="${m.id}"
+             title="${here
+               ? 'The model reads this record from here — click to send all of it again'
+               : 'Send the model this message onward, and nothing above it'}">⇤ ${
+      here ? 'FROM HERE' : 'START HERE'}</button>`,
+  ];
 
   if (m.role === 'user') {
     acts.push(`<button class="winAct" data-act="editMsg" data-msg="${m.id}" title="Rewrite this question and answer it again — everything after it is discarded">✎ EDIT</button>`);
@@ -675,15 +699,18 @@ async function versionsHtml(id, rec) {
     view.diffFrom = diffFrom;
   }
 
+  const newest = versions[0]?.version;
   const rows = versions.map((v) => `
     <div class="verRow${v.version === diffTo ? ' isTo' : ''}${v.version === diffFrom ? ' isFrom' : ''}">
-      <span class="verNo">V${v.version}</span>
+      <span class="verNo">V${v.version}${v.restored_from ? `<span class="verFrom">← V${v.restored_from}</span>` : ''}</span>
       <span class="verStat">${
         v.additions == null ? 'ORIGINAL' : `<span class="add">+${v.additions}</span> <span class="del">−${v.deletions}</span>`}</span>
       <span class="verMeta">${v.chars.toLocaleString()} CHARS · ${fmtWhen(v.created_at)}</span>
       <span class="verActs">
         <button class="winAct" data-act="from" data-v="${v.version}">FROM</button>
         <button class="winAct" data-act="to" data-v="${v.version}">TO</button>
+        ${v.version === newest ? '' : `<button class="winAct go" data-act="useVersion" data-v="${v.version}"
+                title="Make this draft the document's text — filed forward as the newest version">⤒ MAKE CURRENT</button>`}
         <a class="winAct" href="/api/documents/${doc.id}/versions/${v.version}/docx" data-act="dl">⤓ DOCX</a>
         <a class="winAct" href="/api/documents/${doc.id}/versions/${v.version}/rtf" data-act="dl">⤓ RTF</a>
         <button class="winAct" data-act="editVersion" data-v="${v.version}"
@@ -1057,6 +1084,8 @@ el.deck.addEventListener('click', (e) => {
   if (act === 'saveMsg') saveResponse(msgId, el2);
   if (act === 'groundTruth') groundTruth(id, msgId, el2);
   if (act === 'retryMsg') retryTurn(id, msgId);
+  if (act === 'startHere') setContextStart(id, msgId);
+  if (act === 'startClear') setContextStart(id, null);
   if (act === 'editMsg') beginEdit(win, id, msgId);
   if (act === 'editRun') commitEdit(win, id, msgId);
   if (act === 'editCancel') { viewOf(id).editing = null; openFront(id); }
@@ -1077,6 +1106,7 @@ el.deck.addEventListener('click', (e) => {
   if (act === 'docEditCancel') cancelDocEdit(id);
   if (act === 'editVersion' && rec?.document) beginDocEdit(id, rec.document, Number(el2.dataset.v));
   if (act === 'rmVersion' && rec?.document) removeVersion(id, rec.document, Number(el2.dataset.v));
+  if (act === 'useVersion' && rec?.document) restoreVersion(id, rec.document, Number(el2.dataset.v));
   if (act === 'fileVersion' && rec?.document) fileMessageAsVersion(id, rec, Number(el2.dataset.msg));
 
   if (act === 'copyDoc' && rec?.document) {
@@ -1296,6 +1326,12 @@ const stowOracle = () => {
 el.oracleToggle.addEventListener('click', () => (el.oracle.classList.contains('away') ? openOracle() : stowOracle()));
 el.collapseOracle.addEventListener('click', stowOracle);
 el.showOracle.addEventListener('click', openOracle);
+
+// On a phone the Oracle is a bottom sheet rather than a column beside the deck,
+// so an Oracle that is open on arrival is an Oracle covering the archive you
+// came to look at. It starts stowed there, one tap from the ◈ tab. The markup
+// ships open because that is the right answer on every wider screen.
+if (matchMedia('(max-width: 720px)').matches) stowOracle();
 
 /** Answer text → HTML. Citations become buttons; nothing else is trusted. */
 function formatAnswer(text) {
@@ -1623,7 +1659,7 @@ window.deck = {
  * value, or null when the user backs out — so a caller can always tell "they
  * said no" from "they said yes to an empty string".
  */
-function openModal({ title, what = '', label = null, value = '', confirmWord = null, ok = 'CONFIRM', danger = false }) {
+function openModal({ title, what = '', label = null, value = '', confirmWord = null, ok = 'CONFIRM', danger = false, suggest = null }) {
   el.modalTitle.textContent = title;
   el.modalWhat.textContent = what;
   el.modalWhat.classList.toggle('hidden', !what);
@@ -1642,6 +1678,11 @@ function openModal({ title, what = '', label = null, value = '', confirmWord = n
   el.modalOk.classList.toggle('danger', danger);
   el.modalOk.classList.toggle('go', !danger);
   el.modalOk.disabled = Boolean(confirmWord);
+  // Offered only where a name is being chosen: the model proposes, the field
+  // stays editable, and nothing is written until CONFIRM.
+  el.modalSuggest.classList.toggle('hidden', !suggest);
+  el.modalSuggest.disabled = false;
+  el.modalSuggest.textContent = '✦ SUGGEST';
   el.modal.classList.remove('hidden');
   if (wantsInput) { el.modalInput.focus(); el.modalInput.select(); }
 
@@ -1652,6 +1693,7 @@ function openModal({ title, what = '', label = null, value = '', confirmWord = n
       el.modalInput.removeEventListener('keydown', onKey);
       el.modalOk.removeEventListener('click', accept);
       el.modalCancel.removeEventListener('click', cancel);
+      el.modalSuggest.removeEventListener('click', propose);
       document.removeEventListener('keydown', onEsc, true);
       resolve(result);
     };
@@ -1664,10 +1706,28 @@ function openModal({ title, what = '', label = null, value = '', confirmWord = n
     const onKey = (e) => { if (e.key === 'Enter') { e.preventDefault(); accept(); } };
     const onEsc = (e) => { if (e.key === 'Escape') { e.stopPropagation(); cancel(); } };
 
+    const propose = async () => {
+      el.modalSuggest.disabled = true;
+      el.modalSuggest.textContent = '✦ READING…';
+      el.modalErr.textContent = '';
+      try {
+        el.modalInput.value = await suggest();
+        el.modalInput.focus();
+        el.modalInput.select();
+        check();
+      } catch (err) {
+        el.modalErr.textContent = `NO NAME — ${err.message}`;
+      } finally {
+        el.modalSuggest.disabled = false;
+        el.modalSuggest.textContent = '✦ AGAIN';
+      }
+    };
+
     el.modalInput.addEventListener('input', check);
     el.modalInput.addEventListener('keydown', onKey);
     el.modalOk.addEventListener('click', accept);
     el.modalCancel.addEventListener('click', cancel);
+    el.modalSuggest.addEventListener('click', propose);
     document.addEventListener('keydown', onEsc, true);
   });
 }
@@ -1920,21 +1980,38 @@ el.rewriteGo.addEventListener('click', async () => {
 
 /* ------------------------------------------------------- record & document */
 
-async function renameRecord(id) {
-  const rec = byId.get(id);
-  const title = await openModal({
-    title: `RENAME REC ${pad(id)}`, label: 'Record title', value: rec?.title ?? '', ok: 'RENAME',
+/** Ask the model what something in the archive should be called. */
+const suggestNameFor = (kind, id) => async () => {
+  const { title } = await api(`/api/${kind}/${id}/suggest-title`, {
+    method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}',
   });
-  if (title == null) return;
+  return title;
+};
+
+async function renameRecord(id) {
+  // The one rename, reached from the window's ✎ — the same dialog the source
+  // picker and the graph raise, so the model's suggestion is offered here too.
+  if (await renameSubject('threads', id, byId.get(id)?.title)) await openFront(id);
+}
+
+/**
+ * Move, or clear, where a record begins for the model.
+ *
+ * The cache for this record is dropped so the next paint reads the new mark;
+ * nothing about the transcript itself changed, which is the whole point.
+ */
+async function setContextStart(id, msgId) {
   try {
     await api(`/api/threads/${id}`, {
       method: 'PATCH', headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ title }),
+      body: JSON.stringify({ contextFromMessageId: msgId }),
     });
-    await refreshArchive({ keep: id, drop: id });
+    recordCache.delete(id);
     await openFront(id);
-    toast(`REC ${pad(id)} renamed`);
-  } catch (err) { toast(`Rename failed — ${err.message}`, 'err'); }
+    toast(msgId == null
+      ? `REC ${pad(id)} sends its whole transcript again`
+      : `REC ${pad(id)} now starts there — earlier turns are kept, not sent`);
+  } catch (err) { toast(`Could not move the start — ${err.message}`, 'err'); }
 }
 
 async function removeRecord(id) {
@@ -2073,6 +2150,38 @@ async function commitDocEdit(id, doc) {
       ? `Saved as v${saved.version} — the text is identical to v${saved.version - 1}`
       : `Saved as v${saved.version} · +${saved.additions} −${saved.deletions}`);
   } catch (err) { toast(`Save failed — ${err.message}`, 'err'); }
+}
+
+/**
+ * Put an older draft back in the document's slot.
+ *
+ * EDIT on a version opens it in the editor for a pass of corrections; this is
+ * the case where the old draft was already right and there is nothing to
+ * correct. Neither rewinds the rail: the restored text is filed forward as the
+ * newest version, so whatever was current stays on the rail and going back
+ * again is another restore, not an undo.
+ */
+async function restoreVersion(id, doc, version) {
+  const newest = doc.newest ?? doc.versions;
+  const ok = await openModal({
+    title: `MAKE V${version} CURRENT`,
+    what: `V${version} of ${doc.filename} becomes the text every record on this document is `
+      + `answered from. Nothing is lost — it is filed forward as v${newest + 1}, and v${newest} stays on the rail.`,
+    ok: 'MAKE CURRENT',
+  });
+  if (ok == null) return;
+  try {
+    const out = await api(`/api/documents/${doc.id}/versions/${version}/restore`, { method: 'POST' });
+    docCache.delete(doc.id);
+    versionCache.delete(doc.id);
+    recordCache.delete(id);
+    viewOf(id).diffTo = null;
+    await refreshArchive({ keep: id, drop: id });
+    await openFront(id);
+    toast(out.identical
+      ? `v${version} was already the current text — filed as v${out.version}`
+      : `v${version} restored as v${out.version} · +${out.additions} −${out.deletions}`);
+  } catch (err) { toast(`Restore failed — ${err.message}`, 'err'); }
 }
 
 async function removeVersion(id, doc, version) {
@@ -2517,6 +2626,8 @@ function sourceRows(catalog, on) {
         <label class="pickRow srcPick${cur ? ' on' : ''}">
           <input type="checkbox" class="pickBox srcBox" data-kind="thread" data-id="${t.id}"${cur ? ' checked' : ''} />
           <span class="srcPickName">◈ REC ${pad(t.id)} · ${esc(t.title)}</span>
+          <button class="srcRename" data-rename="threads:${t.id}" data-name="${esc(t.title)}"
+                  title="Rename this record">✎</button>
           <select class="hudSelect srcModeSel" data-id="${t.id}" title="How much of that record is read">
             <option value="full"${cur?.mode === 'last' ? '' : ' selected'}>WHOLE</option>
             <option value="last"${cur?.mode === 'last' ? ' selected' : ''}>LAST ANSWER</option>
@@ -2534,6 +2645,8 @@ function sourceRows(catalog, on) {
         <label class="pickRow srcPick${cur ? ' on' : ''}">
           <input type="checkbox" class="pickBox srcBox" data-kind="graph" data-id="${g.id}"${cur ? ' checked' : ''} />
           <span class="srcPickName">⁂ ${esc(g.title)}</span>
+          <button class="srcRename" data-rename="graphs:${g.id}" data-name="${esc(g.title)}"
+                  title="Rename this graph">✎</button>
           <span class="pickMeta">${g.points} POINT${g.points === 1 ? '' : 'S'} · ${g.lines} LINE${
             g.lines === 1 ? '' : 'S'} · ${g.books} BOOK${g.books === 1 ? '' : 'S'} · ${fmtWhen(g.updated_at)}${
             g.points ? '' : ' · EMPTY, CARRIES NOTHING'}</span>
@@ -2564,6 +2677,49 @@ function wireSourceRows() {
     sel.addEventListener('click', (e) => e.preventDefault()));
   el.sheetBody.querySelectorAll('.srcBox').forEach((box) =>
     box.addEventListener('change', () => box.closest('.pickRow').classList.toggle('on', box.checked)));
+
+  // Rename where the thing is read. The row is patched rather than the sheet
+  // rebuilt, so ticks made before the rename survive it.
+  el.sheetBody.querySelectorAll('.srcRename').forEach((btn) =>
+    btn.addEventListener('click', async (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const [kind, id] = btn.dataset.rename.split(':');
+      const named = await renameSubject(kind, Number(id), btn.dataset.name);
+      if (!named) return;
+      btn.dataset.name = named;
+      const label = btn.closest('.pickRow').querySelector('.srcPickName');
+      label.textContent = kind === 'graphs' ? `⁂ ${named}` : `◈ REC ${pad(Number(id))} · ${named}`;
+    }));
+}
+
+/**
+ * Rename a record or a graph from wherever it is listed, with the model
+ * standing by to propose a name. Returns the new name, or null if the user
+ * backed out or the write failed.
+ */
+async function renameSubject(kind, id, current) {
+  const isGraph = kind === 'graphs';
+  const title = await openModal({
+    title: isGraph ? 'RENAME GRAPH' : `RENAME REC ${pad(id)}`,
+    label: isGraph ? 'Graph name' : 'Record title',
+    value: current ?? '', ok: 'RENAME',
+    suggest: suggestNameFor(kind, id),
+  });
+  if (title == null || title === current) return null;
+  try {
+    await api(`/api/${kind}/${id}`, {
+      method: 'PATCH', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ title }),
+    });
+    // A renamed record is named in the deck behind the sheet too.
+    if (!isGraph) await refreshArchive({ keep: id, drop: id });
+    toast(isGraph ? 'Graph renamed' : `REC ${pad(id)} renamed`);
+    return title;
+  } catch (err) {
+    toast(`Rename failed — ${err.message}`, 'err');
+    return null;
+  }
 }
 
 async function openSourcePicker(id) {
