@@ -2423,9 +2423,13 @@ function openSheet({ title, body, acts = [] }) {
   el.sheetTitle.textContent = title;
   el.sheetBody.innerHTML = body;
   el.sheetActs.innerHTML = '';
-  for (const a of acts) {
+  // CLOSE is always there, and always first: the ✕ in the corner is a long way
+  // from the button you are actually reaching for, and leaving must be as easy
+  // to find as committing. `tone` says which is which — green writes, red walks.
+  const all = [{ label: 'CLOSE', tone: 'quit', onClick: closeSheet }, ...acts];
+  for (const a of all) {
     const b = document.createElement('button');
-    b.className = `hudBtn${a.primary ? ' primary' : ''}`;
+    b.className = `hudBtn${a.primary ? ' primary' : ''}${a.tone ? ` ${a.tone}` : ''}`;
     b.textContent = a.label;
     b.disabled = Boolean(a.disabled);
     if (a.id) b.id = a.id;
@@ -2471,7 +2475,7 @@ async function openSaved() {
       body,
       acts: id == null ? [] : [{
         label: `USE IN REC ${pad(id)}`,
-        primary: true,
+        tone: 'go',
         onClick: async () => {
           const ids = [...el.sheetBody.querySelectorAll('.pickBox:checked:not(:disabled)')]
             .map((b) => Number(b.dataset.id));
@@ -2590,7 +2594,7 @@ async function openSourcePicker(id) {
       ${sourceRows(catalog, on)}`,
     acts: [{
       label: 'SAVE SOURCES',
-      primary: true,
+      tone: 'go',
       onClick: async () => {
         try {
           const saved = await api(`/api/threads/${id}/sources`, {
@@ -2643,7 +2647,7 @@ async function openOraclePins() {
       ${sourceRows(catalog, on)}`,
     acts: [{
       label: 'PIN THESE',
-      primary: true,
+      tone: 'go',
       onClick: () => {
         oraclePins = tickedSources();
         showOraclePins();

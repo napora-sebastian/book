@@ -1236,10 +1236,9 @@ async function openDocEditor({ documentId, filename, kind = null, seedVersion = 
     title: `EDIT · ${String(filename ?? '').toUpperCase()}`,
     body: `<p class="modalWhat">${esc(notes.join(' '))}</p>
            <textarea class="docEditor" spellcheck="false"></textarea>`,
-    acts: [
-      { label: 'CANCEL', tone: 'quit', run: () => closeSheet() },
-      { label: 'SAVE AS NEW VERSION', tone: 'go', run: (btn) => saveDocEditor(documentId, btn) },
-    ],
+    // CLOSE is added by the sheet itself and discards this edit, so the only
+    // button this one owns is the one that writes.
+    acts: [{ label: 'SAVE AS NEW VERSION', tone: 'go', run: (btn) => saveDocEditor(documentId, btn) }],
   });
 
   const box = el.sheetBody.querySelector('.docEditor');
@@ -1842,7 +1841,6 @@ async function pickExtraSources(threadId) {
       <h3 class="srcPickHead">GRAPHS</h3>
       ${graphRows || '<p class="logNote">NO OTHER GRAPHS YET.</p>'}`,
     acts: [
-      { label: 'CANCEL', tone: 'quit', run: () => closeSheet() },
       {
         label: 'SAVE SOURCES',
         tone: 'go',
@@ -1914,7 +1912,6 @@ async function openAtlas() {
       title: 'ATLAS',
       body: `<p class="modalWhat">No graphs yet. Put a book or a conversation down and this
              becomes the shelf: every graph, what it stands on, and what it shares.</p>`,
-      acts: [{ label: 'CLOSE', tone: 'quit', run: () => closeSheet() }],
     });
   }
 
@@ -1983,7 +1980,6 @@ async function openAtlas() {
       ${t.shared ? `<h3 class="atlasHead">SHARED ACROSS GRAPHS</h3>${sharedRows}` : ''}
       <h3 class="atlasHead">EVERY GRAPH</h3>
       ${graphRows}`,
-    acts: [{ label: 'CLOSE', tone: 'quit', run: () => closeSheet() }],
     onPick: async (target) => {
       const go = target.closest('[data-go]');
       if (go) {
@@ -2047,7 +2043,6 @@ async function openUsage(kind, id, name) {
            these canvases — not a copy on any of them. ${kind === 'document'
              ? 'Correcting its text here changes what every point on every graph is answered from, except the ones pinned to an older draft.'
              : 'A turn sent here is a turn every one of them shows.'}</p>${rows}`,
-    acts: [{ label: 'CLOSE', tone: 'quit', run: () => closeSheet() }],
     onPick: (target) => {
       const go = target.closest('[data-go]');
       if (!go) return;
@@ -2247,7 +2242,11 @@ function openSheet({ title, body, acts = [], onPick = null }) {
   sheetPick = onPick;
 
   el.sheetActs.innerHTML = '';
-  for (const a of acts) {
+  // CLOSE is always there, and always first. The ✕ in the corner is a long way
+  // from the button the hand is already on, and leaving has to be as easy to
+  // find as committing.
+  const all = [{ label: 'CLOSE', tone: 'quit', run: () => closeSheet() }, ...acts];
+  for (const a of all) {
     const btn = document.createElement('button');
     // `tone` is what the button does, not what it says: 'go' writes, 'quit'
     // leaves. A sheet with SAVE and CANCEL side by side is the whole reason.

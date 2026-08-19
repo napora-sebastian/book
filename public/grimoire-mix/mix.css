@@ -27,8 +27,8 @@
 
 /* ------------------------------------------------------------- the overlay */
 
-/* Above everything the deck has: the expanded stage and the deck's own dialogs
-   both stand at 200, and this is raised over a deck that may have either open. */
+/* Above everything the deck has: the expanded stage stands at 200 and the
+   deck's own dialogs at 300, and this is raised over either of them. */
 .graphModal {
   position: fixed; inset: 0; z-index: 400;
   display: flex;

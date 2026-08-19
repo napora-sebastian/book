@@ -548,7 +548,11 @@
   border-left: 2px solid var(--cyan);
   box-shadow: 0 0 60px rgba(0, 0, 0, .6), 0 0 30px var(--cyanGlow);
 }
-.constel .sheetBox { width: min(760px, calc(100vw - 48px)); display: flex; flex-direction: column; max-height: 82vh; }
+.constel .sheetBox {
+  width: min(1180px, calc(100vw - 48px));
+  height: 80vh;
+  display: flex; flex-direction: column;
+}
 .constel .modalTop {
   display: flex; align-items: center; gap: var(--s2);
   padding: var(--s3) var(--s4);
@@ -557,7 +561,7 @@
 }
 .constel .modalTop > span:first-child { flex: 1; }
 .constel .modalBody { padding: var(--s4); display: flex; flex-direction: column; gap: var(--s2); }
-.constel .sheetBody { padding: var(--s3) var(--s4); overflow-y: auto; flex: 1; }
+.constel .sheetBody { padding: var(--s3) var(--s4); overflow-y: auto; flex: 1; min-height: 0; }
 .constel .modalWhat { margin: 0 0 var(--s2); font-size: 12.5px; line-height: 1.65; color: var(--fgSoft); }
 .constel .modalLabel { font-family: var(--mono); font-size: 9.5px; letter-spacing: .12em; color: var(--dim); }
 .constel .modalInput {
