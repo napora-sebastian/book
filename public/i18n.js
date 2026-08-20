@@ -43,6 +43,7 @@ export const SKIP_SEL = [
   '.body', '.bubble', '.thinkBody', '.said', '.docText', '.previewText',        // messages and documents
   '.previewEdit', '.oracleTurn.you', '.oracleAns',
   '.noteRead', '.toolSay', '.toolList',                                         // notes, and the tool log
+  '.srcMeta', '.srcWhy', '.srcFindSay',                                         // the source picker's own text
   '.suggestBody', '.suggestAsk', '.slashHint',                                  // suggestions, and the tool menu
   '.diffView', '.dText', '.dLine', '.hunk',                                     // diffs are document text
   '.nodeTitle', '.nodePreview', '.nodeLive', '.nodeStage',                      // graph cards

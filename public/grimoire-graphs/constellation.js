@@ -34,6 +34,7 @@
 import {
   attachSlashMenu, askWhatToSuggest, streamSuggestion, suggestionBox,
 } from '../tools-ui.js';
+import { sourceListHtml, sourceSearchHtml, wireSourceList } from '../source-picker.js';
 
 /* The whole view, built once, off-document. Held together by `data-el` rather
    than ids: mounted over a page that has its own #modal and #snacks, ids would
@@ -2096,54 +2097,22 @@ async function pickExtraSources(threadId) {
   }
 
   const on = new Map(mine.items.map((i) => [`${i.kind}:${i.ref_id}`, i]));
-  const rank = (kind, x) => (on.has(`${kind}:${x.id}`) ? on.get(`${kind}:${x.id}`).position : Infinity);
 
   // Conversations already upstream of this point are left out: they are read
   // through the line, and offering them again would send the same transcript
-  // twice.
+  // twice. The open graph goes too — this point stands on it, so reading it
+  // would be reading its own transcript back to itself.
   const upstream = upstreamThreadIds(selected);
-  const threads = catalog.threads
-    .filter((t) => !upstream.has(t.id))
-    .sort((a, b) => rank('thread', a) - rank('thread', b));
-  // The open graph is not offered: this point stands on it, so reading it would
-  // be reading its own transcript back to itself.
-  const graphs = catalog.graphs
-    .filter((g) => g.id !== graphId)
-    .sort((a, b) => rank('graph', a) - rank('graph', b));
+  const shown = {
+    threads: catalog.threads.filter((t) => !upstream.has(t.id)),
+    graphs: catalog.graphs.filter((g) => g.id !== graphId),
+    // Notes on THIS canvas are already upstream if a line reaches them, and
+    // reachable by drawing one if it does not. The ones worth offering here are
+    // the ones that live somewhere else.
+    notes: (catalog.notes ?? []).filter((n) => n.graph_id !== graphId),
+  };
 
-  const threadRows = threads.map((t) => {
-    const cur = on.get(`thread:${t.id}`);
-    return `
-      <label class="pickRow thread srcPick${cur ? ' on' : ''}">
-        <input type="checkbox" class="pickBox srcBox" data-kind="thread" data-id="${t.id}"${cur ? ' checked' : ''} />
-        <span class="pickGlyph">◈</span>
-        <span class="pickMain">
-          <span class="pickName">${esc(t.title)}</span>
-          <span class="pickMeta">${t.messages} MSG${t.filename ? ` · ◆ ${esc(t.filename)}` : ''} · ${
-            esc(fmtWhen(t.updated_at))}${t.messages ? '' : ' · EMPTY, CARRIES NOTHING'}</span>
-        </span>
-        <select class="hudSelect srcModeSel" data-id="${t.id}" title="How much of that conversation is read">
-          <option value="full"${cur?.mode === 'last' ? '' : ' selected'}>WHOLE</option>
-          <option value="last"${cur?.mode === 'last' ? ' selected' : ''}>LAST ANSWER</option>
-        </select>
-      </label>`;
-  }).join('');
-
-  const graphRows = graphs.map((g) => {
-    const cur = on.get(`graph:${g.id}`);
-    return `
-      <label class="pickRow srcPick${cur ? ' on' : ''}">
-        <input type="checkbox" class="pickBox srcBox" data-kind="graph" data-id="${g.id}"${cur ? ' checked' : ''} />
-        <span class="pickGlyph">⁂</span>
-        <span class="pickMain">
-          <span class="pickName">${esc(g.title)}</span>
-          <span class="pickMeta">${g.points} POINT${g.points === 1 ? '' : 'S'} · ${g.lines} LINE${
-            g.lines === 1 ? '' : 'S'} · ${g.books} BOOK${g.books === 1 ? '' : 'S'} · ${esc(fmtWhen(g.updated_at))}${
-            g.points ? '' : ' · EMPTY, CARRIES NOTHING'}</span>
-        </span>
-      </label>`;
-  }).join('');
-
+  let list;
   openSheet({
     title: '⁂ EXTRA SOURCES',
     body: `
@@ -2152,22 +2121,19 @@ async function pickExtraSources(threadId) {
          when you send, so it is always as they stand now. This is saved on the conversation,
          not on the canvas: every graph it is on reads it.</p>
       ${mine.summary.chars ? `<p class="modalWhat">Now carrying ${fmtNum(mine.summary.chars)} characters into every turn on this point.</p>` : ''}
-      <h3 class="srcPickHead">CONVERSATIONS</h3>
-      ${threadRows || '<p class="logNote">NOTHING ELSE TO READ — EVERY OTHER CONVERSATION IS ALREADY UPSTREAM OF THIS POINT.</p>'}
-      <h3 class="srcPickHead">GRAPHS</h3>
-      ${graphRows || '<p class="logNote">NO OTHER GRAPHS YET.</p>'}`,
+      ${sourceSearchHtml('what should this point have read? — the archive is searched for you')}
+      ${sourceListHtml(shown, on, {
+        heads: {
+          records: 'CONVERSATIONS', graphs: 'GRAPHS', notes: 'NOTES',
+          none: 'NOTHING ELSE TO READ — IT IS ALL ALREADY UPSTREAM OF THIS POINT.',
+        },
+      })}`,
     acts: [
       {
         label: 'SAVE SOURCES',
         tone: 'go',
         run: async (btn) => {
-          const items = [...el.sheetBody.querySelectorAll('.srcBox:checked')].map((b) => ({
-            kind: b.dataset.kind,
-            id: Number(b.dataset.id),
-            mode: b.dataset.kind === 'thread'
-              ? (el.sheetBody.querySelector(`.srcModeSel[data-id="${b.dataset.id}"]`)?.value ?? 'full')
-              : 'full',
-          }));
+          const items = list.ticked();
           btn.disabled = true;
           try {
             const saved = await put(`/api/threads/${threadId}/sources`, { items });
@@ -2186,11 +2152,9 @@ async function pickExtraSources(threadId) {
     ],
   });
 
-  // Inside a <label>, a click on the mode picker would toggle the tick as well.
-  el.sheetBody.querySelectorAll('.srcModeSel').forEach((sel) =>
-    sel.addEventListener('click', (ev) => ev.preventDefault()));
-  el.sheetBody.querySelectorAll('.srcBox').forEach((box) =>
-    box.addEventListener('change', () => box.closest('.pickRow').classList.toggle('on', box.checked)));
+  list = wireSourceList(el.sheetBody, {
+    on, api, threadId, model: el.cModel?.value || null,
+  });
 }
 
 /** Placing a point with no graph open creates the graph it goes on. */

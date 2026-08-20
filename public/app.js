@@ -1,6 +1,11 @@
 import {
   attachSlashMenu, askWhatToSuggest, streamSuggestion, suggestionBox, renderSuggestions,
 } from './tools-ui.js';
+import { sourceListHtml, sourceSearchHtml, wireSourceList } from './source-picker.js';
+
+/* The open picker, so Save and the cost line read the same list the user is
+   ticking rather than re-querying the DOM for a shape they both have to know. */
+let sourceList = null;
 
 const $ = (id) => document.getElementById(id);
 const el = {
@@ -2465,82 +2470,24 @@ async function openSources() {
   ]);
 
   const on = new Map(mine.items.map((i) => [`${i.kind}:${i.ref_id}`, i]));
-  // Attached first, in the order they are read; everything else after it. The
-  // list is long, and what this thread already reads is what you came to see.
-  const rank = (kind, id) => (on.has(`${kind}:${id}`) ? on.get(`${kind}:${id}`).position : Infinity);
-  const threads = [...catalog.threads].sort((a, b) => rank('thread', a.id) - rank('thread', b.id));
-  const graphs = [...catalog.graphs].sort((a, b) => rank('graph', a.id) - rank('graph', b.id));
-
-  // Every row can be renamed where it is read: the picker is the one list that
-  // shows conversations and graphs side by side, and it is where a name that
-  // no longer describes the work is most obviously wrong.
-  const row = (kind, id, name, meta, extra = '') => {
-    const cur = on.get(`${kind}:${id}`);
-    return `
-      <label class="sourceRow${cur ? ' on' : ''}">
-        <input type="checkbox" class="sourceBox" data-kind="${kind}" data-id="${id}"${cur ? ' checked' : ''} />
-        <span class="sourceMain">
-          <span class="sourceName">${escapeHtml(name)}</span>
-          <span class="sourceMeta">${meta}</span>
-        </span>
-        ${extra}
-        <button class="rowRename" data-rename-kind="${kind}" data-rename-id="${id}"
-                data-rename-name="${escapeHtml(name)}"
-                title="Rename this ${kind === 'graph' ? 'graph' : 'conversation'}">✎</button>
-      </label>`;
-  };
-
-  const threadRows = threads.map((t) => row(
-    'thread', t.id, t.title,
-    `${t.messages} msg${t.filename ? ` · ${escapeHtml(t.filename)}` : ''} · ${fmtWhen(t.updated_at)}${
-      t.messages ? '' : ' · empty, contributes nothing'}`,
-    `<select class="sourceMode" data-id="${t.id}" title="How much of that conversation is read">
-       <option value="full"${on.get(`thread:${t.id}`)?.mode === 'last' ? '' : ' selected'}>Whole transcript</option>
-       <option value="last"${on.get(`thread:${t.id}`)?.mode === 'last' ? ' selected' : ''}>Final answer only</option>
-     </select>`,
-  )).join('');
-
-  const graphRows = graphs.map((g) => row(
-    'graph', g.id, g.title,
-    `${g.points} point${g.points === 1 ? '' : 's'} · ${g.lines} line${g.lines === 1 ? '' : 's'} · ${
-      g.books} book${g.books === 1 ? '' : 's'} · ${fmtWhen(g.updated_at)}${
-      g.points ? '' : ' · empty, contributes nothing'}`,
-  )).join('');
 
   el.sourceList.innerHTML = `
     <p class="sourceIntro">Tick anything this thread should read alongside its own document.
-       A conversation is read as its transcript, a graph as all of its points and the lines
-       between them. Nothing is copied — every question re-reads them as they are now.</p>
-    <h4 class="sourceHead">Conversations</h4>
-    ${threadRows || '<div class="d">No other conversations yet.</div>'}
-    <h4 class="sourceHead">Graphs</h4>
-    ${graphRows || '<div class="d">No graphs yet — build one in the Grimoire.</div>'}`;
+       Open a conversation or a graph with ▸ to take one answer, or one note, instead of the
+       whole thing. Nothing is copied — every question re-reads them as they are now.</p>
+    ${sourceSearchHtml('what should this thread have read? — the archive is searched for you')}
+    ${sourceListHtml(catalog, on, {
+      heads: { records: 'Conversations', graphs: 'Graphs', notes: 'Notes', none: 'Nothing here yet.' },
+    })}`;
 
-  // Clicking the mode picker must not toggle the row it sits in.
-  el.sourceList.querySelectorAll('.sourceMode').forEach((sel) =>
-    sel.addEventListener('click', (e) => e.preventDefault()));
-
-  // Nor must the pencil: the row is a <label>, so a plain click would tick it.
-  el.sourceList.querySelectorAll('.rowRename').forEach((btn) =>
-    btn.addEventListener('click', async (e) => {
-      e.preventDefault();
-      e.stopPropagation();
-      const { renameKind, renameId, renameName } = btn.dataset;
-      const named = renameKind === 'graph'
-        ? await renameGraph(Number(renameId), renameName)
-        : await renameThread(Number(renameId), renameName);
-      // Patch the row in place. Rebuilding the sheet would be simpler and
-      // would silently drop every tick the user has not saved yet.
-      if (named) {
-        btn.dataset.renameName = named;
-        btn.closest('.sourceRow').querySelector('.sourceName').textContent = named;
-      }
-    }));
-  el.sourceList.querySelectorAll('.sourceBox').forEach((box) =>
-    box.addEventListener('change', () => {
-      box.closest('.sourceRow').classList.toggle('on', box.checked);
-      showSourceCost(null);
-    }));
+  sourceList = wireSourceList(el.sourceList, {
+    on, api,
+    threadId: currentThreadId,
+    model: el.model?.value || null,
+    // Any change makes the saved cost stale, and a number that is quietly wrong
+    // is worse than no number.
+    onChange: () => showSourceCost(null),
+  });
 
   showSourceCost(mine.summary);
   refreshSourceCount(mine.items.length);
@@ -2551,27 +2498,16 @@ async function openSources() {
 
 /** What the attached set costs, from the server — blanked while it is stale. */
 function showSourceCost(summary) {
-  const ticked = el.sourceList.querySelectorAll('.sourceBox:checked').length;
+  const ticked = sourceList?.count() ?? 0;
   el.sourcesTitle.textContent = `Extra sources · ${ticked} selected`;
   el.sourcesCost.textContent = summary
     ? (summary.chars ? `${summary.chars.toLocaleString()} chars sent with every question` : '')
     : 'unsaved — press Save sources';
 }
 
-function tickedSources() {
-  return [...el.sourceList.querySelectorAll('.sourceBox:checked')].map((box) => {
-    const kind = box.dataset.kind;
-    const id = Number(box.dataset.id);
-    const mode = kind === 'thread'
-      ? el.sourceList.querySelector(`.sourceMode[data-id="${id}"]`)?.value ?? 'full'
-      : 'full';
-    return { kind, id, mode };
-  });
-}
-
 async function saveSources() {
   if (!currentThreadId) return;
-  const items = tickedSources();
+  const items = sourceList?.ticked() ?? [];
   try {
     const saved = await jsonPost(`/api/threads/${currentThreadId}/sources`, { items }, 'PUT');
     const { summary } = await api(`/api/threads/${currentThreadId}/sources`);
@@ -2595,6 +2531,7 @@ async function previewSources() {
   if (!summary.chars) return showSnackbar('Nothing attached yet — tick something and save.', 'error');
 
   el.saveSources.disabled = true;
+  sourceList = null;
   el.previewSources.textContent = 'Back to the list';
   el.sourceList.innerHTML = `
     <p class="sourceIntro">The first 4,000 characters of exactly what the next question in this

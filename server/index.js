@@ -24,6 +24,10 @@ import { threadTitlePrompt, suggestTitle } from './naming.js';
 import { mountOracle } from './oracle.js';
 import { mountGraph } from './graph.js';
 import { runTools, parseSlash, SLASH_TOOLS, TOOLS } from './tools.js';
+// The picker's "find me what I need" is retrieval first: the index is what
+// actually finds things, and the model only judges which hits are the right
+// grain to attach.
+import { searchThreads } from './search.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
@@ -641,6 +645,164 @@ app.get('/api/source-catalog', (req, res) => {
  * The size is assembled, not stored: a source grows when someone answers in it,
  * and a number filed at the moment of attaching would be wrong by the next turn.
  */
+/**
+ * What one row of the picker holds, fetched when it is expanded.
+ *
+ * Not shipped with the catalogue: a shelf of twenty graphs and two hundred
+ * conversations is thousands of rows, and the user opens two of them.
+ */
+/**
+ * "Find me what I need." — the picker's own search.
+ *
+ * A shelf that has grown for months cannot be ticked from memory: the user
+ * knows what they want the next conversation to have read, not which of two
+ * hundred records holds it. So they say it in their own words and this returns
+ * the rows that suit, each with the reason it was chosen.
+ *
+ * It is retrieval FIRST and a model second. Full-text search over every message
+ * and every note is what actually finds things; the model's job is to judge
+ * which of the hits are the right grain to attach — a whole record, one answer
+ * out of it, a single note — and to say why. Handing the model the bare
+ * catalogue instead would be asking it to guess from titles.
+ *
+ * Nothing is attached. It returns picks; the user ticks.
+ */
+app.post('/api/source-suggest', asyncRoute(async (req, res) => {
+  const need = String(req.body?.need ?? '').trim();
+  if (!need) return res.status(400).json({ error: 'Say what you need.' });
+  const exclude = req.body?.threadId != null ? Number(req.body.threadId) : null;
+  const chosenModel = req.body?.model || llm.config().model;
+
+  const catalog = db.sourceCatalog({ excludeThreadId: Number.isFinite(exclude) ? exclude : null });
+
+  // What the index thinks is relevant, as candidates rather than as an answer.
+  const hits = searchThreads(need, { limit: 8 });
+  const byThread = new Map(hits.map((h) => [h.threadId, h]));
+  const noteHits = catalog.notes
+    .map((n) => ({ ...n, score: overlapScore(need, `${n.label ?? ''} ${n.text ?? ''}`) }))
+    .filter((n) => n.score > 0)
+    .sort((a, b) => b.score - a.score)
+    .slice(0, 12);
+
+  // A shortlist, not the shelf: what search found, plus the most recent work,
+  // because "what I was just doing" is a need the index cannot spell.
+  const shortlist = [
+    ...catalog.threads
+      .map((t) => ({ ...t, hit: byThread.get(t.id) }))
+      .sort((a, b) => (b.hit?.hits ?? 0) - (a.hit?.hits ?? 0))
+      .slice(0, 24),
+  ];
+
+  const lines = [
+    '<records>',
+    ...shortlist.map((t) => {
+      const snip = t.hit?.matches?.[0]?.snippet ? ` · matched: ${clipLine(t.hit.matches[0].snippet, 160)}` : '';
+      return `  record ${t.id} · "${t.title}" · ${t.messages} messages · ${t.chars} chars${
+        t.filename ? ` · book ${t.filename}` : ''}${snip}`;
+    }),
+    '</records>',
+    '<notes>',
+    ...noteHits.map((n) => `  note ${n.id} · "${n.label ?? 'untitled'}" · ${n.chars} chars · on graph ${
+      n.graph_id} "${n.graph_title}" · ${clipLine(n.text, 180)}`),
+    '</notes>',
+    '<graphs>',
+    ...catalog.graphs.slice(0, 20).map((g) =>
+      `  graph ${g.id} · "${g.title}" · ${g.points} points, ${g.lines} lines · ~${g.chars} chars`),
+    '</graphs>',
+  ];
+
+  const messages = [
+    {
+      role: 'system',
+      content: `You choose what a new conversation should READ, out of a local archive.
+
+The user says what they need. Reply with ONE JSON object and nothing else:
+
+  {"thought": "<one short sentence, in the user's language>",
+   "picks": [{"kind": "record"|"note"|"graph", "id": 12, "mode": "full"|"last",
+              "why": "<a few words, in the user's language>"}]}
+
+Pick the SMALLEST thing that carries what they need, and the character counts below are how
+you tell. A note of 90 chars and the graph it sits on are not equally cheap: everything you
+pick is re-read on EVERY question in that conversation from now on, so a graph carrying a
+whole book is a real cost and is only right when they want the whole line of work.
+
+A single note beats the graph it sits on. One record beats three. "mode": "last" reads only a
+record's final answer and is right when what they want is the conclusion rather than the
+argument that produced it — which is most of the time.
+
+Six picks at the very most, fewer is better, and none at all is a legitimate answer when
+nothing in the list fits — say so in "thought" rather than picking something adjacent.
+Only ids that appear below. Never invent one.`,
+    },
+    { role: 'user', content: `${lines.join('\n')}\n\n<need>${need}</need>` },
+  ];
+
+  const started = Date.now();
+  try {
+    const result = await llm.complete(messages, { model: chosenModel });
+    trace(traceRow({ threadId: null, kind: 'source-suggest', task: 'sources', model: chosenModel, result, messages }));
+
+    const plan = safeParse(stripFence(result.text)) ?? {};
+    const known = {
+      record: new Set(catalog.threads.map((t) => t.id)),
+      note: new Set(catalog.notes.map((n) => n.id)),
+      graph: new Set(catalog.graphs.map((g) => g.id)),
+    };
+    // A model that names a record that does not exist has not found anything —
+    // it has guessed. Dropped here rather than shown as a tick that fails on save.
+    const picks = (Array.isArray(plan.picks) ? plan.picks : [])
+      .map((p) => ({
+        kind: p?.kind === 'note' ? 'note' : p?.kind === 'graph' ? 'graph' : 'thread',
+        rawKind: p?.kind,
+        id: Number(p?.id),
+        mode: p?.mode === 'last' ? 'last' : 'full',
+        why: String(p?.why ?? '').slice(0, 140),
+      }))
+      .filter((p) => Number.isInteger(p.id)
+        && known[p.rawKind === 'note' ? 'note' : p.rawKind === 'graph' ? 'graph' : 'record']?.has(p.id))
+      .slice(0, 6)
+      .map(({ rawKind, ...p }) => p);
+
+    res.json({
+      need,
+      thought: String(plan.thought ?? '').slice(0, 300),
+      picks,
+      searched: hits.map((h) => ({ threadId: h.threadId, title: h.title, hits: h.hits })),
+      model: result.model || chosenModel,
+      ms: Date.now() - started,
+    });
+  } catch (err) {
+    res.status(502).json({ error: err.message });
+  }
+}));
+
+/** Crude term overlap — the notes are not in the full-text index. */
+function overlapScore(need, text) {
+  const terms = String(need).toLowerCase().match(/\p{L}{3,}/gu) ?? [];
+  const hay = String(text).toLowerCase();
+  return terms.filter((t) => hay.includes(t)).length;
+}
+
+const clipLine = (s, n) => {
+  const t = String(s ?? '').replace(/\s+/g, ' ').trim();
+  return t.length <= n ? t : `${t.slice(0, n)}…`;
+};
+
+const stripFence = (s) => String(s ?? '').replace(/```(?:json)?/gi, '').trim();
+
+app.get('/api/source-catalog/graph/:id', (req, res) => {
+  const id = Number(req.params.id);
+  if (!db.getGraph(id)) return res.status(404).json({ error: 'No such graph.' });
+  res.json({ points: db.graphContents(id) });
+});
+
+app.get('/api/source-catalog/thread/:id', (req, res) => {
+  const id = Number(req.params.id);
+  if (!db.getThread(id)) return res.status(404).json({ error: 'No such record.' });
+  res.json({ messages: db.threadContents(id) });
+});
+
 app.get('/api/threads/:id/sources', (req, res) => {
   const id = Number(req.params.id);
   if (!db.getThread(id)) return res.status(404).json({ error: 'No such thread.' });

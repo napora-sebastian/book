@@ -437,6 +437,25 @@ export const pl = {
      suggestion → propozycja. Tool ids after the slash are code and are never
      translated — /suggest is what the server parses. */
   'Suggest': 'Zaproponuj',
+
+  /* The source picker. Vocabulary: source → źródło, record → zapis,
+     note → notatka, graph → graf, whole → całość. */
+  'Find': 'Znajdź',
+  'Reading…': 'Czytam…',
+  'what should this conversation have read?': 'co ta rozmowa powinna była przeczytać?',
+  'what should this record have read? — the archive is searched for you': 'co ten zapis powinien był przeczytać? — archiwum zostanie przeszukane za ciebie',
+  'what should this thread have read? — the archive is searched for you': 'co ten wątek powinien był przeczytać? — archiwum zostanie przeszukane za ciebie',
+  'what should this point have read? — the archive is searched for you': 'co ten punkt powinien był przeczytać? — archiwum zostanie przeszukane za ciebie',
+  'what should the Oracle be holding while it answers?': 'co Wyrocznia ma trzymać, kiedy odpowiada?',
+  'Show what this holds': 'Pokaż, co to zawiera',
+  'How much of it is read': 'Ile z tego jest czytane',
+  'Whole': 'Całość',
+  'Last answer': 'Ostatnia odpowiedź',
+  'Notes': 'Notatki',
+  'Nothing here yet.': 'Jeszcze nic tu nie ma.',
+  'Nothing in it.': 'Nic w tym nie ma.',
+  'Tick what this record should read beside its own book. Open a record or a graph with ▸ to take one answer or one note out of it instead of the whole thing. Nothing is copied — every question re-reads them as they stand at that moment.': 'Zaznacz, co ten zapis ma czytać obok własnej księgi. Otwórz zapis albo graf znakiem ▸, żeby wziąć z niego jedną odpowiedź albo jedną notatkę zamiast całości. Nic nie jest kopiowane — każde pytanie czyta je na nowo, w stanie z tamtej chwili.',
+  'Tick anything this thread should read alongside its own document. Open a conversation or a graph with ▸ to take one answer, or one note, instead of the whole thing. Nothing is copied — every question re-reads them as they are now.': 'Zaznacz, co ten wątek ma czytać obok własnego dokumentu. Otwórz rozmowę albo graf znakiem ▸, żeby wziąć jedną odpowiedź albo jedną notatkę zamiast całości. Nic nie jest kopiowane — każde pytanie czyta je w obecnym stanie.',
   'What should the model suggest?': 'Co model ma zaproponować?',
   'another category, a counter-argument, a shorter title…': 'inną kategorię, kontrargument, krótszy tytuł…',
   'Send': 'Wyślij',

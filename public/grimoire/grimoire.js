@@ -9,6 +9,7 @@
    =========================================================================== */
 
 import { attachSlashMenu, askWhatToSuggest, streamSuggestion } from '../tools-ui.js';
+import { sourceListHtml, sourceSearchHtml, wireSourceList, keyOf } from '../source-picker.js';
 
 const $ = (id) => document.getElementById(id);
 const el = {
@@ -2723,85 +2724,6 @@ async function openSaved() {
    a source afterwards is read by the very next turn.
    ------------------------------------------------------------------------ */
 
-/** One tick list, used for a record's own sources and for the Oracle's pins. */
-function sourceRows(catalog, on) {
-  const rank = (kind, x) => (on.has(`${kind}:${x.id}`) ? on.get(`${kind}:${x.id}`).position : Infinity);
-
-  const threadRows = [...catalog.threads]
-    .sort((a, b) => rank('thread', a) - rank('thread', b))
-    .map((t) => {
-      const cur = on.get(`thread:${t.id}`);
-      return `
-        <label class="pickRow srcPick${cur ? ' on' : ''}">
-          <input type="checkbox" class="pickBox srcBox" data-kind="thread" data-id="${t.id}"${cur ? ' checked' : ''} />
-          <span class="srcPickName">◈ REC ${pad(t.id)} · ${esc(t.title)}</span>
-          <button class="srcRename" data-rename="threads:${t.id}" data-name="${esc(t.title)}"
-                  title="Rename this record">✎</button>
-          <select class="hudSelect srcModeSel" data-id="${t.id}" title="How much of that record is read">
-            <option value="full"${cur?.mode === 'last' ? '' : ' selected'}>WHOLE</option>
-            <option value="last"${cur?.mode === 'last' ? ' selected' : ''}>LAST ANSWER</option>
-          </select>
-          <span class="pickMeta">${t.messages} MSG${t.filename ? ` · ◆ ${esc(t.filename)}` : ''} · ${
-            fmtWhen(t.updated_at)}${t.messages ? '' : ' · EMPTY, CARRIES NOTHING'}</span>
-        </label>`;
-    }).join('');
-
-  const graphRows = [...catalog.graphs]
-    .sort((a, b) => rank('graph', a) - rank('graph', b))
-    .map((g) => {
-      const cur = on.get(`graph:${g.id}`);
-      return `
-        <label class="pickRow srcPick${cur ? ' on' : ''}">
-          <input type="checkbox" class="pickBox srcBox" data-kind="graph" data-id="${g.id}"${cur ? ' checked' : ''} />
-          <span class="srcPickName">⁂ ${esc(g.title)}</span>
-          <button class="srcRename" data-rename="graphs:${g.id}" data-name="${esc(g.title)}"
-                  title="Rename this graph">✎</button>
-          <span class="pickMeta">${g.points} POINT${g.points === 1 ? '' : 'S'} · ${g.lines} LINE${
-            g.lines === 1 ? '' : 'S'} · ${g.books} BOOK${g.books === 1 ? '' : 'S'} · ${fmtWhen(g.updated_at)}${
-            g.points ? '' : ' · EMPTY, CARRIES NOTHING'}</span>
-        </label>`;
-    }).join('');
-
-  return `
-    <h3 class="srcPickHead">RECORDS</h3>
-    ${threadRows || '<div class="notice">NO RECORDS YET.</div>'}
-    <h3 class="srcPickHead">GRAPHS</h3>
-    ${graphRows || '<div class="notice">NO GRAPHS YET — BUILD ONE IN ⁂ CONSTELLATION.</div>'}`;
-}
-
-/** What is ticked in the open sheet, in the order the list shows it. */
-function tickedSources() {
-  return [...el.sheetBody.querySelectorAll('.srcBox:checked')].map((b) => ({
-    kind: b.dataset.kind,
-    id: Number(b.dataset.id),
-    mode: b.dataset.kind === 'thread'
-      ? (el.sheetBody.querySelector(`.srcModeSel[data-id="${b.dataset.id}"]`)?.value ?? 'full')
-      : 'full',
-  }));
-}
-
-/** Inside a <label>, a click on the mode picker would toggle the tick as well. */
-function wireSourceRows() {
-  el.sheetBody.querySelectorAll('.srcModeSel').forEach((sel) =>
-    sel.addEventListener('click', (e) => e.preventDefault()));
-  el.sheetBody.querySelectorAll('.srcBox').forEach((box) =>
-    box.addEventListener('change', () => box.closest('.pickRow').classList.toggle('on', box.checked)));
-
-  // Rename where the thing is read. The row is patched rather than the sheet
-  // rebuilt, so ticks made before the rename survive it.
-  el.sheetBody.querySelectorAll('.srcRename').forEach((btn) =>
-    btn.addEventListener('click', async (e) => {
-      e.preventDefault();
-      e.stopPropagation();
-      const [kind, id] = btn.dataset.rename.split(':');
-      const named = await renameSubject(kind, Number(id), btn.dataset.name);
-      if (!named) return;
-      btn.dataset.name = named;
-      const label = btn.closest('.pickRow').querySelector('.srcPickName');
-      label.textContent = kind === 'graphs' ? `⁂ ${named}` : `◈ REC ${pad(Number(id))} · ${named}`;
-    }));
-}
-
 /**
  * Rename a record or a graph from wherever it is listed, with the model
  * standing by to propose a name. Returns the new name, or null if the user
@@ -2847,16 +2769,18 @@ async function openSourcePicker(id) {
 
   const on = new Map(mine.items.map((i) => [`${i.kind}:${i.ref_id}`, i]));
 
+  let list;
   openSheet({
     title: `⁂ EXTRA SOURCES · REC ${pad(id)}`,
     body: `
-      <p class="modalWhat">Tick what this record should read beside its own book. A record is read
-         as its transcript, a graph as all of its points and the lines between them. Nothing is
+      <p class="modalWhat">Tick what this record should read beside its own book. Open a record or a
+         graph with ▸ to take one answer or one note out of it instead of the whole thing. Nothing is
          copied — every question re-reads them as they stand at that moment.</p>
       ${mine.summary.chars
         ? `<div class="notice">NOW CARRYING ${mine.summary.chars.toLocaleString()} CHARS INTO EVERY QUESTION IN THIS RECORD.</div>`
         : ''}
-      ${sourceRows(catalog, on)}`,
+      ${sourceSearchHtml('what should this record have read? — the archive is searched for you')}
+      ${sourceListHtml(catalog, on)}`,
     acts: [{
       label: 'SAVE SOURCES',
       tone: 'go',
@@ -2864,7 +2788,7 @@ async function openSourcePicker(id) {
         try {
           const saved = await api(`/api/threads/${id}/sources`, {
             method: 'PUT', headers: { 'content-type': 'application/json' },
-            body: JSON.stringify({ items: tickedSources() }),
+            body: JSON.stringify({ items: list.ticked() }),
           });
           const rec = recordCache.get(id);
           if (rec?.thread) rec.thread.source_count = saved.items.length;
@@ -2878,7 +2802,7 @@ async function openSourcePicker(id) {
     }],
   });
 
-  wireSourceRows();
+  list = wireSourceList(el.sheetBody, { on, api, threadId: id, model: el.oracleModel?.value || null });
 }
 
 /**
@@ -2902,19 +2826,21 @@ async function openOraclePins() {
 
   const on = new Map(oraclePins.map((p, i) => [`${p.kind}:${p.id}`, { ...p, position: i }]));
 
+  let list;
   openSheet({
     title: `⁂ PINNED SOURCES · ${oraclePins.length}`,
     body: `
       <p class="modalWhat">The Oracle searches the archive for itself. Anything ticked here is given
          to it instead — in front of it from the first round, whether or not a search would have
-         found it. A graph can only reach it this way: search matches transcripts, and a graph is
-         the shape over them.</p>
-      ${sourceRows(catalog, on)}`,
+         found it. A graph and a note can only reach it this way: search matches transcripts, and
+         neither of those is one.</p>
+      ${sourceSearchHtml('what should the Oracle be holding while it answers?')}
+      ${sourceListHtml(catalog, on)}`,
     acts: [{
       label: 'PIN THESE',
       tone: 'go',
       onClick: () => {
-        oraclePins = tickedSources();
+        oraclePins = list.ticked();
         showOraclePins();
         closeSheet();
         toast(oraclePins.length
@@ -2924,7 +2850,7 @@ async function openOraclePins() {
     }],
   });
 
-  wireSourceRows();
+  list = wireSourceList(el.sheetBody, { on, api, model: el.oracleModel?.value || null });
 }
 
 function showOraclePins() {

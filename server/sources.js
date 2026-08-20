@@ -210,14 +210,40 @@ export function graphPart(graphId) {
 export function attachedParts(threadId) {
   const parts = [];
   for (const row of db.threadSourceRows(threadId)) {
-    const part = row.kind === 'graph'
-      ? graphPart(row.ref_graph_id)
-      : threadPart({ threadId: row.ref_thread_id, mode: row.mode });
+    const refId = row.ref_thread_id ?? row.ref_graph_id ?? row.ref_node_id ?? row.ref_message_id;
+    let part = null;
+    if (row.kind === 'graph') part = graphPart(row.ref_graph_id);
+    else if (row.kind === 'note') part = notePart({ node: db.getGraphNode(row.ref_node_id) });
+    else if (row.kind === 'message') part = messagePart(row.ref_message_id);
+    else part = threadPart({ threadId: row.ref_thread_id, mode: row.mode });
+
     if (part?.text?.trim()) {
-      parts.push({ ...part, attached: true, refKind: row.kind, refId: row.ref_thread_id ?? row.ref_graph_id, mode: row.mode });
+      parts.push({ ...part, attached: true, refKind: row.kind, refId, mode: row.mode });
     }
   }
   return parts;
+}
+
+/**
+ * One answer, lifted out of the conversation it was given in.
+ *
+ * Named by that conversation rather than by itself: an answer has no title, and
+ * "Answer in 'Chapter 3 — the money argument'" is what tells the reader why it
+ * is in front of them. A question can be picked too — sometimes the useful
+ * thing to carry forward is how something was asked.
+ */
+export function messagePart(messageId) {
+  const m = db.getMessage(messageId);
+  if (!m?.content?.trim()) return null;
+  const thread = db.getThread(m.thread_id);
+  const where = thread?.title ? `“${thread.title}”` : `record ${m.thread_id}`;
+
+  return {
+    kind: 'message',
+    name: `${m.role === 'user' ? 'Question' : 'Answer'} in ${where}`,
+    detail: m.created_at,
+    text: m.content,
+  };
 }
 
 /**

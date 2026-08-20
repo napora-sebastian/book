@@ -1656,24 +1656,93 @@ export function answerReuseLinks() {
    ========================================================================= */
 
 db.exec(`
+  -- What a conversation reads besides its own book.
+  --
+  -- Four grains, because "read that" means four different sizes depending on
+  -- what is being pointed at:
+  --   thread   a whole conversation, or just its final answer
+  --   graph    a whole canvas — every point and the lines between them
+  --   note     ONE note off a canvas: a category, a passage, a heading
+  --   message  ONE answer out of a conversation
+  --
+  -- The last two are what make the picker worth expanding. Before them, wanting
+  -- one paragraph of a graph meant attaching the whole graph and paying for all
+  -- of it on every turn.
   CREATE TABLE IF NOT EXISTS thread_sources (
-    id            INTEGER PRIMARY KEY AUTOINCREMENT,
-    thread_id     INTEGER NOT NULL REFERENCES threads(id) ON DELETE CASCADE,
-    kind          TEXT    NOT NULL CHECK (kind IN ('thread','graph')),
+    id             INTEGER PRIMARY KEY AUTOINCREMENT,
+    thread_id      INTEGER NOT NULL REFERENCES threads(id) ON DELETE CASCADE,
+    kind           TEXT    NOT NULL CHECK (kind IN ('thread','graph','note','message')),
     -- Exactly one of these is set, the same shape a graph node uses.
-    ref_thread_id INTEGER REFERENCES threads(id) ON DELETE CASCADE,
-    ref_graph_id  INTEGER REFERENCES graphs(id)  ON DELETE CASCADE,
+    ref_thread_id  INTEGER REFERENCES threads(id)     ON DELETE CASCADE,
+    ref_graph_id   INTEGER REFERENCES graphs(id)      ON DELETE CASCADE,
+    ref_node_id    INTEGER REFERENCES graph_nodes(id) ON DELETE CASCADE,
+    ref_message_id INTEGER REFERENCES messages(id)    ON DELETE CASCADE,
     -- 'last' is only meaningful for a conversation: its final answer instead of
-    -- the whole transcript. A graph is always read whole.
-    mode          TEXT    NOT NULL DEFAULT 'full' CHECK (mode IN ('full','last')),
-    position      INTEGER NOT NULL DEFAULT 0,
-    created_at    TEXT    NOT NULL DEFAULT (datetime('now')),
-    CHECK ((ref_thread_id IS NULL) <> (ref_graph_id IS NULL))
+    -- the whole transcript. Everything else is read whole, because a note and a
+    -- single answer already ARE the smallest thing they can be.
+    mode           TEXT    NOT NULL DEFAULT 'full' CHECK (mode IN ('full','last')),
+    position       INTEGER NOT NULL DEFAULT 0,
+    created_at     TEXT    NOT NULL DEFAULT (datetime('now')),
+    CHECK ((ref_thread_id IS NOT NULL) + (ref_graph_id IS NOT NULL)
+         + (ref_node_id IS NOT NULL) + (ref_message_id IS NOT NULL) = 1)
   );
 
   CREATE INDEX IF NOT EXISTS idx_thread_sources_thread ON thread_sources(thread_id, position);
+`);
+
+/* The two finer grains arrived after the first sources did, and SQLite cannot
+   relax a CHECK constraint in place — the old `kind IN ('thread','graph')` is
+   part of the table's definition. Rebuilt once, guarded on its own schema text,
+   the same way graph_nodes was when notes arrived. */
+const SOURCES_SQL = db
+  .prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'thread_sources'")
+  .get()?.sql ?? '';
+
+if (SOURCES_SQL && !SOURCES_SQL.includes("'note'")) {
+  db.exec('PRAGMA foreign_keys = OFF');
+  try {
+    db.exec(`
+      BEGIN;
+      CREATE TABLE thread_sources_new (
+        id             INTEGER PRIMARY KEY AUTOINCREMENT,
+        thread_id      INTEGER NOT NULL REFERENCES threads(id) ON DELETE CASCADE,
+        kind           TEXT    NOT NULL CHECK (kind IN ('thread','graph','note','message')),
+        ref_thread_id  INTEGER REFERENCES threads(id)     ON DELETE CASCADE,
+        ref_graph_id   INTEGER REFERENCES graphs(id)      ON DELETE CASCADE,
+        ref_node_id    INTEGER REFERENCES graph_nodes(id) ON DELETE CASCADE,
+        ref_message_id INTEGER REFERENCES messages(id)    ON DELETE CASCADE,
+        mode           TEXT    NOT NULL DEFAULT 'full' CHECK (mode IN ('full','last')),
+        position       INTEGER NOT NULL DEFAULT 0,
+        created_at     TEXT    NOT NULL DEFAULT (datetime('now')),
+        CHECK ((ref_thread_id IS NOT NULL) + (ref_graph_id IS NOT NULL)
+             + (ref_node_id IS NOT NULL) + (ref_message_id IS NOT NULL) = 1)
+      );
+      INSERT INTO thread_sources_new
+             (id, thread_id, kind, ref_thread_id, ref_graph_id, mode, position, created_at)
+      SELECT  id, thread_id, kind, ref_thread_id, ref_graph_id, mode, position, created_at
+        FROM thread_sources;
+      DROP TABLE thread_sources;
+      ALTER TABLE thread_sources_new RENAME TO thread_sources;
+      CREATE INDEX IF NOT EXISTS idx_thread_sources_thread ON thread_sources(thread_id, position);
+      COMMIT;
+    `);
+  } catch (err) {
+    db.exec('ROLLBACK');
+    throw err;
+  } finally {
+    db.exec('PRAGMA foreign_keys = ON');
+  }
+}
+
+// One row per (conversation, kind, thing). The COALESCE spans all four ref
+// columns now: without the two new ones a note and a message would both index
+// as NULL, and SQLite treats NULLs as distinct — so the guard would quietly
+// stop guarding exactly where the picker can now produce duplicates.
+db.exec(`
+  DROP INDEX IF EXISTS idx_thread_sources_ref;
   CREATE UNIQUE INDEX IF NOT EXISTS idx_thread_sources_ref
-    ON thread_sources(thread_id, kind, COALESCE(ref_thread_id, ref_graph_id));
+    ON thread_sources(thread_id, kind,
+      COALESCE(ref_thread_id, ref_graph_id, ref_node_id, ref_message_id));
 `);
 
 /** The raw rows, in reading order. The inference path wants nothing else. */
@@ -1691,17 +1760,29 @@ export function threadSourceRows(threadId) {
 export function listThreadSources(threadId) {
   return db.prepare(
     `SELECT s.id, s.kind, s.mode, s.position,
-            COALESCE(s.ref_thread_id, s.ref_graph_id) AS ref_id,
-            COALESCE(t.title, g.title) AS title,
+            COALESCE(s.ref_thread_id, s.ref_graph_id, s.ref_node_id, s.ref_message_id) AS ref_id,
+            -- A note is titled by its label and falls back to its opening line;
+            -- a single answer has no title at all, so the row that shows it is
+            -- given one made of the conversation it came out of.
+            COALESCE(t.title, g.title, n.label, 'Answer in ' || COALESCE(mt.title, 'a record')) AS title,
             t.updated_at AS thread_updated, g.updated_at AS graph_updated,
             d.filename,
-            (SELECT COUNT(*) FROM messages m WHERE m.thread_id = s.ref_thread_id) AS messages,
-            (SELECT COUNT(*) FROM graph_nodes n WHERE n.graph_id = s.ref_graph_id) AS points,
-            (SELECT COUNT(*) FROM graph_edges e WHERE e.graph_id = s.ref_graph_id) AS lines
+            n.graph_id     AS node_graph_id,
+            ng.title       AS node_graph_title,
+            m.thread_id    AS message_thread_id,
+            mt.title       AS message_thread_title,
+            LENGTH(COALESCE(n.text, m.content, '')) AS chars,
+            (SELECT COUNT(*) FROM messages x WHERE x.thread_id = s.ref_thread_id) AS messages,
+            (SELECT COUNT(*) FROM graph_nodes x WHERE x.graph_id = s.ref_graph_id) AS points,
+            (SELECT COUNT(*) FROM graph_edges x WHERE x.graph_id = s.ref_graph_id) AS lines
        FROM thread_sources s
-       LEFT JOIN threads t   ON t.id = s.ref_thread_id
-       LEFT JOIN documents d ON d.id = t.document_id
-       LEFT JOIN graphs g    ON g.id = s.ref_graph_id
+       LEFT JOIN threads     t  ON t.id  = s.ref_thread_id
+       LEFT JOIN documents   d  ON d.id  = t.document_id
+       LEFT JOIN graphs      g  ON g.id  = s.ref_graph_id
+       LEFT JOIN graph_nodes n  ON n.id  = s.ref_node_id
+       LEFT JOIN graphs      ng ON ng.id = n.graph_id
+       LEFT JOIN messages    m  ON m.id  = s.ref_message_id
+       LEFT JOIN threads     mt ON mt.id = m.thread_id
       WHERE s.thread_id = ?
       ORDER BY s.position ASC, s.id ASC`,
   ).all(threadId);
@@ -1723,21 +1804,33 @@ export function countThreadSources(threadId) {
  * ticking everything in a list that happens to include the current record still
  * saves the rest.
  */
+const SOURCE_KINDS = new Set(['thread', 'graph', 'note', 'message']);
+const SOURCE_TABLE = {
+  thread: 'threads', graph: 'graphs', note: 'graph_nodes', message: 'messages',
+};
+
 export function setThreadSources(threadId, items) {
   const clean = [];
   const seen = new Set();
   for (const raw of items ?? []) {
-    const kind = raw?.kind === 'graph' ? 'graph' : 'thread';
+    const kind = SOURCE_KINDS.has(raw?.kind) ? raw.kind : 'thread';
     const id = Number(raw?.id);
     if (!Number.isInteger(id) || id <= 0) continue;
+    // A conversation reading itself would be handed its own transcript twice —
+    // once as history, once as a source — and the second copy is always stale.
     if (kind === 'thread' && id === Number(threadId)) continue;
     const key = `${kind}:${id}`;
     if (seen.has(key)) continue;
 
-    const exists = kind === 'thread'
-      ? db.prepare('SELECT 1 FROM threads WHERE id = ?').get(id)
-      : db.prepare('SELECT 1 FROM graphs WHERE id = ?').get(id);
+    const exists = db.prepare(`SELECT 1 FROM ${SOURCE_TABLE[kind]} WHERE id = ?`).get(id);
     if (!exists) continue;
+    // Only a note holds text. A book or a conversation standing on a canvas is
+    // reachable as itself, and picking it here as though it were a note would
+    // silently attach nothing.
+    if (kind === 'note') {
+      const node = getGraphNode(id);
+      if (node?.kind !== 'note') continue;
+    }
 
     seen.add(key);
     clean.push({ kind, id, mode: raw?.mode === 'last' && kind === 'thread' ? 'last' : 'full' });
@@ -1746,13 +1839,16 @@ export function setThreadSources(threadId, items) {
   inTransaction(() => {
     db.prepare('DELETE FROM thread_sources WHERE thread_id = ?').run(threadId);
     const ins = db.prepare(
-      `INSERT INTO thread_sources (thread_id, kind, ref_thread_id, ref_graph_id, mode, position)
-       VALUES (?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO thread_sources
+         (thread_id, kind, ref_thread_id, ref_graph_id, ref_node_id, ref_message_id, mode, position)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
     );
     clean.forEach((c, i) => ins.run(
       threadId, c.kind,
       c.kind === 'thread' ? c.id : null,
       c.kind === 'graph' ? c.id : null,
+      c.kind === 'note' ? c.id : null,
+      c.kind === 'message' ? c.id : null,
       c.mode, i,
     ));
   });
@@ -1762,24 +1858,91 @@ export function setThreadSources(threadId, items) {
 
 /** Everything that can be attached, described the way the picker shows it. */
 export function sourceCatalog({ excludeThreadId = null } = {}) {
+  // `chars` on every row is what makes "pick the smallest thing that carries
+  // what I need" a decision anyone can make — the user reading the list, and
+  // the model choosing from it. Without it a note and the 57k-char graph it
+  // sits on look equally cheap, and the graph wins on sounding more thorough.
   const threads = db.prepare(
     `SELECT t.id, t.title, t.updated_at, d.filename,
-            (SELECT COUNT(*) FROM messages m WHERE m.thread_id = t.id) AS messages
+            (SELECT COUNT(*) FROM messages m WHERE m.thread_id = t.id) AS messages,
+            (SELECT COALESCE(SUM(LENGTH(m.content)), 0) FROM messages m
+              WHERE m.thread_id = t.id) AS chars
        FROM threads t
        LEFT JOIN documents d ON d.id = t.document_id
       WHERE (? IS NULL OR t.id <> ?)
       ORDER BY t.updated_at DESC, t.id DESC`,
   ).all(excludeThreadId, excludeThreadId);
 
+  // An estimate, not a measurement: graphPart caps what it actually sends, and
+  // a book pinned to an older version is a different length again. It is right
+  // to within the order of magnitude, which is the decision being made.
   const graphs = db.prepare(
     `SELECT g.id, g.title, g.updated_at,
             (SELECT COUNT(*) FROM graph_nodes n WHERE n.graph_id = g.id) AS points,
             (SELECT COUNT(*) FROM graph_edges e WHERE e.graph_id = g.id) AS lines,
             (SELECT COUNT(*) FROM graph_nodes n
-              WHERE n.graph_id = g.id AND n.document_id IS NOT NULL) AS books
+              WHERE n.graph_id = g.id AND n.document_id IS NOT NULL) AS books,
+            (SELECT COALESCE(SUM(
+                      COALESCE(d.chars, 0)
+                    + COALESCE((SELECT SUM(LENGTH(m.content)) FROM messages m
+                                 WHERE m.thread_id = n.thread_id), 0)
+                    + LENGTH(COALESCE(n.text, ''))), 0)
+               FROM graph_nodes n
+               LEFT JOIN documents d ON d.id = n.document_id
+              WHERE n.graph_id = g.id) AS chars
        FROM graphs g
       ORDER BY g.updated_at DESC, g.id DESC`,
   ).all();
 
-  return { threads, graphs };
+  // Every note on every canvas, offered flat as well as under its graph: a
+  // category is worth reading on its own far more often than the canvas it
+  // happens to live on, and hunting for which graph it was on is the step that
+  // stops people using them.
+  const notes = db.prepare(
+    `SELECT n.id, n.label, n.text, n.graph_id, g.title AS graph_title, n.created_at,
+            LENGTH(COALESCE(n.text, '')) AS chars,
+            d.filename AS src_filename
+       FROM graph_nodes n
+       JOIN graphs g      ON g.id = n.graph_id
+       LEFT JOIN documents d ON d.id = n.src_document_id
+      WHERE n.kind = 'note' AND COALESCE(n.text, '') <> ''
+      ORDER BY n.id DESC`,
+  ).all();
+
+  return { threads, graphs, notes };
+}
+
+/**
+ * What one graph holds, for a picker row that has been expanded.
+ *
+ * Fetched on expansion rather than shipped with the catalogue: a shelf of
+ * twenty graphs is a few hundred points, and almost none of them are looked at.
+ */
+export function graphContents(graphId) {
+  return db.prepare(
+    `SELECT n.id, n.kind, n.label, n.doc_version,
+            n.document_id, n.thread_id,
+            d.filename AS doc_filename, d.chars AS doc_chars,
+            t.title    AS thread_title,
+            (SELECT COUNT(*) FROM messages m WHERE m.thread_id = n.thread_id) AS messages,
+            SUBSTR(COALESCE(n.text, ''), 1, 240) AS preview,
+            LENGTH(COALESCE(n.text, '')) AS chars
+       FROM graph_nodes n
+       LEFT JOIN documents d ON d.id = n.document_id
+       LEFT JOIN threads   t ON t.id = n.thread_id
+      WHERE n.graph_id = ?
+      ORDER BY n.id ASC`,
+  ).all(graphId);
+}
+
+/** The turns of one conversation, for a picker row that has been expanded. */
+export function threadContents(threadId) {
+  return db.prepare(
+    `SELECT m.id, m.role, m.created_at, m.model, m.error,
+            SUBSTR(m.content, 1, 240) AS preview,
+            LENGTH(m.content) AS chars
+       FROM messages m
+      WHERE m.thread_id = ? AND COALESCE(m.content, '') <> ''
+      ORDER BY m.id ASC`,
+  ).all(threadId);
 }
