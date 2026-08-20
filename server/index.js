@@ -890,6 +890,47 @@ app.post('/api/threads/:id/messages/:messageId/ground-truth', asyncRoute(async (
    so nothing plans, and the answer arrives one call sooner.
    -------------------------------------------------------------------------- */
 
+/**
+ * Remove one message from a conversation, wherever it sits in it.
+ *
+ * Deleting a question takes the answer under it too. An answer whose question
+ * is gone does not read as an answer — it reads as the model volunteering a
+ * paragraph — and worse, it goes on being SENT to the model as exactly that,
+ * so every later turn inherits a non-sequitur. Deleting an answer on its own is
+ * fine and leaves the question standing, which is usually the point: a question
+ * with no answer under it is a turn you can retry.
+ *
+ * Deliberately not the same move as edit. Edit discards the whole tail because
+ * the replies after a rewritten question answer a question nobody asked. Here
+ * nothing else moves, so a bad exchange can be cut out of the middle of a long
+ * record without costing the fifty turns that followed it.
+ *
+ * A pinned source pointing at a deleted answer goes with it (ON DELETE CASCADE
+ * on thread_sources.ref_message_id), so the count comes back in the response —
+ * a conversation quietly losing one of its sources is worth saying out loud.
+ */
+app.delete('/api/messages/:id', (req, res) => {
+  const id = Number(req.params.id);
+  const msg = db.getMessage(id);
+  if (!msg) return res.status(404).json({ error: 'No such message.' });
+
+  const messages = db.getMessages(msg.thread_id);
+  const idx = messages.findIndex((m) => m.id === id);
+
+  const ids = [id];
+  if (msg.role === 'user' && messages[idx + 1]?.role === 'assistant') ids.push(messages[idx + 1].id);
+
+  const pinned = db.messagesPinnedAsSources(ids);
+  for (const mid of ids) db.deleteMessage(mid);
+
+  res.json({
+    deleted: ids,
+    threadId: msg.thread_id,
+    remaining: db.getMessages(msg.thread_id).length,
+    unpinned: pinned,
+  });
+});
+
 app.get('/api/messages/:id/suggestions', (req, res) => {
   res.json({ suggestions: db.listSuggestions(Number(req.params.id)) });
 });
@@ -1417,11 +1458,14 @@ app.post('/api/threads/:id/messages', asyncRoute(async (req, res) => {
 }));
 
 /**
- * Re-run a turn that failed, without retyping the question. `messageId` is the
- * failed assistant reply, or the user message whose reply never arrived.
+ * Re-run a turn without retyping the question. `messageId` is either the
+ * question to ask again, or the failed assistant reply under it.
  *
- * Only the tail of a thread can be retried: regenerating a turn in the middle
- * would leave every later message answering a reply that no longer exists.
+ * A question can be re-asked anywhere in the thread — everything after it is
+ * discarded first, exactly as an edit does, since a reply that no longer exists
+ * cannot be what the turns below it were answering. An *answer* is different:
+ * only the last one can be retried, and only if it failed, because re-rolling a
+ * good answer in the middle silently invalidates the rest of the record.
  */
 app.post('/api/threads/:id/messages/:messageId/retry', asyncRoute(async (req, res) => {
   const threadId = Number(req.params.id);
@@ -1430,25 +1474,30 @@ app.post('/api/threads/:id/messages/:messageId/retry', asyncRoute(async (req, re
 
   const messages = db.getMessages(threadId);
   const last = messages[messages.length - 1];
-  const target = messages.find((m) => m.id === Number(req.params.messageId));
+  const idx = messages.findIndex((m) => m.id === Number(req.params.messageId));
 
-  if (!target) return res.status(404).json({ error: 'No such message.' });
-  if (target.id !== last.id) {
-    return res.status(409).json({ error: 'Only the last turn can be retried.' });
-  }
-  if (target.role === 'assistant' && !target.error) {
-    return res.status(409).json({ error: 'That turn succeeded — send a new message instead.' });
+  if (idx === -1) return res.status(404).json({ error: 'No such message.' });
+  const target = messages[idx];
+
+  if (target.role === 'assistant') {
+    if (target.id !== last.id) {
+      return res.status(409).json({ error: 'Only the last answer can be retried — ask its question again instead.' });
+    }
+    if (!target.error) {
+      return res.status(409).json({ error: 'That turn succeeded — send a new message instead.' });
+    }
   }
 
-  const userIdx = target.role === 'user' ? messages.length - 1 : messages.length - 2;
+  const userIdx = target.role === 'user' ? idx : idx - 1;
   const userMsg = messages[userIdx];
   if (!userMsg || userMsg.role !== 'user') {
     return res.status(409).json({ error: 'No question to retry.' });
   }
 
-  // Drop the failed reply so the retry does not stack a second answer under the
-  // same question. Its traces stay behind, unlinked, for the trace sheet.
-  if (target.role === 'assistant') db.deleteMessage(target.id);
+  // Everything from the old answer onward goes, so the retry replaces the turn
+  // rather than stacking a second answer under the same question. Traces stay
+  // behind, unlinked, for the trace sheet.
+  db.deleteMessagesAfter(threadId, userMsg.id);
 
   const { model } = req.body || {};
   const chosenModel = model || thread.model || llm.config().model;

@@ -806,6 +806,21 @@ export function deleteMessage(id) {
   return true;
 }
 
+/**
+ * How many conversations pin any of these messages as a source.
+ *
+ * Asked before the delete, not after: the rows are gone by then (CASCADE), and
+ * "you also detached this answer from two other conversations" is only useful
+ * if it can still be said.
+ */
+export function messagesPinnedAsSources(ids) {
+  if (!ids.length) return 0;
+  const marks = ids.map(() => '?').join(',');
+  return db
+    .prepare(`SELECT COUNT(*) AS n FROM thread_sources WHERE ref_message_id IN (${marks})`)
+    .get(...ids).n;
+}
+
 /* ------------------------------------------------------------------- traces */
 
 export function addTrace(t) {

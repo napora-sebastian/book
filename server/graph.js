@@ -796,21 +796,29 @@ export function mountGraph(app, { streamTurn }) {
 
     const messages = db.getMessages(threadId);
     const last = messages[messages.length - 1];
-    const target = messages.find((m) => m.id === Number(req.params.messageId));
+    const idx = messages.findIndex((m) => m.id === Number(req.params.messageId));
 
-    if (!target) return res.status(404).json({ error: 'No such message.' });
-    if (target.id !== last.id) return res.status(409).json({ error: 'Only the last turn can be retried.' });
-    if (target.role === 'assistant' && !target.error) {
-      return res.status(409).json({ error: 'That turn succeeded — send a new message instead.' });
+    if (idx === -1) return res.status(404).json({ error: 'No such message.' });
+    const target = messages[idx];
+
+    // Same rule as the deck's: any question can be asked again, and everything
+    // after it goes with the answer it produced. Only a failed answer at the
+    // very end can be retried on its own.
+    if (target.role === 'assistant') {
+      if (target.id !== last.id) {
+        return res.status(409).json({ error: 'Only the last answer can be retried — ask its question again instead.' });
+      }
+      if (!target.error) {
+        return res.status(409).json({ error: 'That turn succeeded — send a new message instead.' });
+      }
     }
 
-    // Drop the failed reply so the retry does not stack a second answer under
-    // the same question. Its traces stay behind for the trace sheet.
-    if (target.role === 'assistant') db.deleteMessage(target.id);
-
-    const userIdx = target.role === 'user' ? messages.length - 1 : messages.length - 2;
+    const userIdx = target.role === 'user' ? idx : idx - 1;
     const userMsg = messages[userIdx];
     if (!userMsg || userMsg.role !== 'user') return res.status(409).json({ error: 'No question to retry.' });
+
+    // Traces stay behind for the trace sheet; only the messages go.
+    db.deleteMessagesAfter(threadId, userMsg.id);
 
     const chosenModel = req.body?.model || thread.model || llm.config().model;
     if (req.body?.model && req.body.model !== thread.model) db.setThreadModel(threadId, req.body.model);
@@ -820,6 +828,58 @@ export function mountGraph(app, { streamTurn }) {
       threadId,
       userMsg,
       history: messages.slice(db.contextStartIndex(threadId, messages), userIdx)
+        .map((m) => ({ role: m.role, content: m.content })),
+      taskId: userMsg.task || 'chat',
+      chosenModel,
+      source: source.parts.length ? { text: source.text, filename: source.filename } : null,
+      graphId: node.graph_id,
+    });
+  }));
+
+  /**
+   * Rewrite a question on a point and answer it again.
+   *
+   * The deck has had this since the beginning; a point's conversation is the
+   * same conversation seen from the canvas, so it gets the same move. What it
+   * cannot share is the route: a point is answered from its upstream sources,
+   * which only this file knows how to assemble.
+   */
+  app.post('/api/graphs/:gid/nodes/:id/messages/:messageId/edit', asyncRoute(async (req, res) => {
+    const node = db.getGraphNode(Number(req.params.id));
+    if (!node || node.graph_id !== Number(req.params.gid)) {
+      return res.status(404).json({ error: 'No such point.' });
+    }
+    if (node.kind !== 'thread') return res.status(409).json({ error: 'A source point has no conversation to edit.' });
+
+    const threadId = node.thread_id;
+    const thread = db.getThread(threadId);
+    if (!thread) return res.status(404).json({ error: 'The conversation is gone.' });
+
+    const messages = db.getMessages(threadId);
+    const idx = messages.findIndex((m) => m.id === Number(req.params.messageId));
+    if (idx === -1) return res.status(404).json({ error: 'No such message.' });
+    if (messages[idx].role !== 'user') {
+      return res.status(409).json({ error: 'Only your own messages can be edited.' });
+    }
+
+    const question = String(req.body?.content ?? '').trim();
+    if (!question) return res.status(400).json({ error: 'Empty message.' });
+
+    const chosenModel = req.body?.model || thread.model || llm.config().model;
+    if (req.body?.model && req.body.model !== thread.model) db.setThreadModel(threadId, req.body.model);
+
+    const userMsg = db.editMessage(messages[idx].id, question);
+    db.deleteMessagesAfter(threadId, userMsg.id);
+
+    // The point is named after its first question, so the rename follows the
+    // edit — otherwise the card on the canvas keeps advertising the old one.
+    if (idx === 0) db.renameThread(threadId, question.slice(0, 60));
+
+    const source = assembleSource(node.id);
+    await streamTurn(res, {
+      threadId,
+      userMsg,
+      history: messages.slice(db.contextStartIndex(threadId, messages), idx)
         .map((m) => ({ role: m.role, content: m.content })),
       taskId: userMsg.task || 'chat',
       chosenModel,

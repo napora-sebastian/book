@@ -1630,7 +1630,22 @@ function turnHtml(m, isLast, { cut = null, before = false } = {}) {
       title="${here
         ? 'This point reads its conversation from here — click to send all of it again'
         : 'Send this message onward, and nothing above it'}">⇤ ${here ? 'FROM HERE' : 'START HERE'}</button>`);
-  if (isLast && m.error) acts.push(`<button class="turnAct" data-msg="${m.id}" data-act="retry">RETRY</button>`);
+  if (you) {
+    // A point's conversation is the same conversation the deck edits, so it
+    // gets the same two moves on a question: rewrite it, or just ask it again.
+    // Both discard what came after — a reply to a question that no longer
+    // exists is what every turn below would otherwise be answering.
+    acts.push(`<button class="turnAct" data-msg="${m.id}" data-act="edit"
+        title="Rewrite this question and answer it again — everything after it is discarded">✎ EDIT</button>`);
+    acts.push(`<button class="turnAct" data-msg="${m.id}" data-act="retry"
+        title="Answer this question again, unchanged — everything after it is discarded">↻ ASK AGAIN</button>`);
+  } else if (isLast && m.error) {
+    acts.push(`<button class="turnAct" data-msg="${m.id}" data-act="retry">RETRY</button>`);
+  }
+  acts.push(`<button class="turnAct quit" data-msg="${m.id}" data-act="drop"
+      title="${you
+        ? 'Remove this question and the answer under it — the rest of the conversation stays'
+        : 'Remove this answer and keep the question, so it can be asked again'}">✕ DELETE</button>`);
 
   return `
     <div class="turn ${you ? 'you' : 'them'}${m.error ? ' fail' : ''}${
@@ -1665,7 +1680,16 @@ function suggestionsHtml(messageId) {
 function renderLog() {
   if (selected == null) return;
   const s = sessions.get(selected);
-  const stored = inspected?.messages ?? [];
+  let stored = inspected?.messages ?? [];
+
+  // An edit or a retry replaces the tail. Those turns are dropped here rather
+  // than out of the DOM, so the new answer does not stream in underneath the
+  // old one it is replacing — and a canvas write mid-stream cannot bring them
+  // back, because the log is rebuilt from this same slice every time.
+  if (s?.replacesFrom != null) {
+    const at = stored.findIndex((m) => m.id === s.replacesFrom);
+    if (at !== -1) stored = stored.slice(0, at);
+  }
 
   const cut = inspected?.thread?.context_from_message_id ?? null;
   const cutAt = cut == null ? -1 : stored.findIndex((m) => m.id === cut);
@@ -1778,9 +1802,66 @@ el.inspLog.addEventListener('click', async (ev) => {
   }
 
   if (act === 'retry') {
+    const at = inspected.messages.findIndex((x) => x.id === msgId);
+    const dropped = inspected.messages.length - at - 1;
+    if (m.role === 'user' && dropped > 1) {
+      const ans = await openModal({
+        title: 'ASK AGAIN',
+        what: `The answer it already has, and ${dropped - 1} later message(s), are discarded. `
+          + 'The question itself is unchanged.',
+        ok: 'ASK AGAIN',
+      });
+      if (!ans) return;
+    }
     return void runTurn(selected, `/api/graphs/${graphId}/nodes/${selected}/messages/${msgId}/retry`, {
       model: el.cModel.value || undefined,
+    }, { replacesFrom: m.role === 'user' ? msgId : inspected.messages[at - 1]?.id ?? msgId });
+  }
+
+  if (act === 'edit') {
+    // The log is rebuilt from scratch on every canvas write, so a textarea left
+    // inside it would be wiped out mid-sentence. The question is opened in the
+    // modal instead, which nothing else redraws.
+    const at = inspected.messages.findIndex((x) => x.id === msgId);
+    const dropped = inspected.messages.length - at - 1;
+    const ans = await openModal({
+      title: 'EDIT THE QUESTION',
+      what: dropped
+        ? `Answered again from here — ${dropped} later message(s) are discarded.`
+        : 'Answered again from here.',
+      label: 'THE QUESTION', value: m.content ?? '', multiline: true, ok: '↻ ASK AGAIN',
     });
+    const text = ans?.value.trim();
+    if (!text) return;
+    return void runTurn(selected, `/api/graphs/${graphId}/nodes/${selected}/messages/${msgId}/edit`, {
+      content: text, model: el.cModel.value || undefined,
+    }, { replacesFrom: msgId });
+  }
+
+  if (act === 'drop') {
+    const at = inspected.messages.findIndex((x) => x.id === msgId);
+    const paired = m.role === 'user' && inspected.messages[at + 1]?.role === 'assistant';
+    const ans = await openModal({
+      title: paired ? 'DELETE THIS EXCHANGE' : m.role === 'user' ? 'DELETE THIS QUESTION' : 'DELETE THIS ANSWER',
+      what: paired
+        ? 'The question and the answer under it go. Everything else on this point stays. This cannot be undone.'
+        : m.role === 'user'
+          ? 'The question goes. Everything else on this point stays. This cannot be undone.'
+          : 'The answer goes and the question stays, so it can be asked again. This cannot be undone.',
+      ok: 'DELETE', danger: true,
+    });
+    if (!ans) return;
+    try {
+      const out = await del(`/api/messages/${msgId}`);
+      await loadThread(selected);
+      renderLog();
+      refreshSources();
+      host.onArchiveChanged?.();
+      toast(out.unpinned
+        ? `Deleted — also detached from ${out.unpinned} conversation(s) that pinned it as a source`
+        : out.deleted.length === 1 ? 'Message deleted' : 'Exchange deleted');
+    } catch (err) { toast(err.message, 'err'); }
+    return;
   }
 
   if (act === 'version') {
@@ -1816,13 +1897,13 @@ el.inspLog.addEventListener('click', async (ev) => {
  * Identical in shape to the deck's, and for the same reason: the card it
  * started on is redrawn on every canvas write, so nothing here may hold a node.
  */
-async function runTurn(nodeId, url, body) {
+async function runTurn(nodeId, url, body, { replacesFrom = null } = {}) {
   if (sessions.has(nodeId)) return toast('That point is already answering — halt it first', 'err');
 
   const ac = new AbortController();
   const s = {
     ac, status: 'running', stage: 'sending…', working: true,
-    answer: '', reasoning: '', user: null,
+    answer: '', reasoning: '', user: null, replacesFrom,
     model: body.model || cfg?.model || 'MODEL',
   };
   sessions.set(nodeId, s);

@@ -1557,10 +1557,11 @@ async function openThread(id) {
   const nodes = messages.map((m) => renderMessage(m, byMsg.get(m.id)));
   paintContextStart(messages);
 
-  // A turn that never produced a clean answer — an error, a stop, or a question
-  // whose reply never arrived — offers a retry on the last bubble.
+  // A failed answer at the end gets a retry of its own, up front where the error
+  // is. Questions carry "↻ Ask again" in their own action row at every position,
+  // so a trailing question needs nothing bolted on here.
   const last = messages[messages.length - 1];
-  if (last && (last.error || last.role === 'user')) addRetry(nodes[nodes.length - 1], last);
+  if (last?.error) addRetry(nodes[nodes.length - 1], last);
 
   if (!messages.length) {
     el.transcript.innerHTML =
@@ -1765,6 +1766,12 @@ function messageActions(wrap, m) {
 
   if (m.role === 'user') {
     acts.appendChild(actBtn('✎ Edit', 'Edit and re-run from here', () => beginEdit(wrap, m)));
+    // The same question, asked again. Edit covers "the prompt was wrong"; this
+    // covers "the prompt was fine and the answer was not", which is most of the
+    // time and should not need the question retyped or even re-read.
+    acts.appendChild(actBtn('↻ Ask again',
+      'Answer this question again — everything after it is discarded',
+      () => retryFrom(wrap, m)));
   } else {
     // The model's rewritten text becomes a reviewable version of the attached
     // document — the diff shows exactly what changed, GitHub-style.
@@ -1824,7 +1831,72 @@ function messageActions(wrap, m) {
     if (m.has_ground_truth) gt.classList.add('checked');
     acts.appendChild(gt);
   }
+
+  // Last, and away from the rest: this is the only control here that destroys
+  // something, and it sits next to Copy in a row people click without looking.
+  const del = actBtn('✕ Delete', 'Remove this message from the thread', () => removeMessage(m));
+  del.classList.add('danger');
+  acts.appendChild(del);
+
   return acts;
+}
+
+/** Is the message after this one an answer to it? */
+function answerUnder(id) {
+  const nodes = [...el.transcript.querySelectorAll('.msg')];
+  const i = nodes.findIndex((n) => n.dataset.id === String(id));
+  return i !== -1 && nodes[i + 1]?.classList.contains('assistant');
+}
+
+/**
+ * Cut one message out of the thread. A question takes its answer with it — the
+ * server pairs them, and saying so up front is the difference between a delete
+ * the user meant and one they have to rebuild from memory.
+ */
+async function removeMessage(m) {
+  if (controller) return showSnackbar('Wait for the turn to finish first', 'error');
+
+  const paired = m.role === 'user' && answerUnder(m.id);
+  const ok = await askConfirm({
+    title: paired ? 'Delete this exchange' : m.role === 'user' ? 'Delete this question' : 'Delete this answer',
+    body: paired
+      ? 'The question and the answer under it are removed. Everything else in the thread stays where it is.'
+      : m.role === 'user'
+        ? 'The question is removed. Everything else in the thread stays where it is.'
+        : 'The answer is removed and the question stays, so you can ask it again. Everything else in the thread stays where it is.',
+    confirmLabel: 'Delete',
+  });
+  if (!ok) return;
+
+  try {
+    const out = await api(`/api/messages/${m.id}`, { method: 'DELETE' });
+    await openThread(currentThreadId);
+    showSnackbar(out.unpinned
+      ? `Deleted — and detached from ${out.unpinned} conversation${out.unpinned === 1 ? '' : 's'} that had it pinned as a source`
+      : `Deleted ${out.deleted.length === 1 ? 'the message' : 'the exchange'}`);
+  } catch (err) { showSnackbar(err.message, 'error'); }
+}
+
+/**
+ * Answer a question again. Everything after it goes, exactly as an edit does,
+ * so the count is confirmed rather than discovered.
+ */
+async function retryFrom(wrap, m) {
+  if (controller) return;
+
+  const dropped = countAfter(m.id);
+  if (dropped) {
+    const ok = await askConfirm({
+      title: 'Ask this question again',
+      body: `The answer it already has, and ${dropped - 1} later message${
+        dropped === 2 ? '' : 's'}, are discarded. The question itself is unchanged.`,
+      confirmLabel: 'Ask again',
+    });
+    if (!ok) return;
+  }
+
+  while (wrap.nextElementSibling) wrap.nextElementSibling.remove();
+  await streamTurn(`/api/threads/${currentThreadId}/messages/${m.id}/retry`, { model: el.model.value });
 }
 
 /** The document id bound to the open thread, or null when none is attached. */

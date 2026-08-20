@@ -379,10 +379,11 @@ function liveTurnsHtml(s) {
 /**
  * What can be done with one turn.
  *
- * Retry is offered only on the tail of a record, and only where something went
- * wrong — the server refuses anything else, and a button that always fails is
- * worse than no button. Editing has no such limit: it discards what came after,
- * which is the point of it.
+ * A question can be edited or asked again anywhere in the record — both discard
+ * what came after, which is the point of them. An ANSWER can only be retried at
+ * the very end and only where something went wrong: re-rolling a good answer in
+ * the middle would silently invalidate every turn built on it. The server holds
+ * the same line, and a button that always fails is worse than no button.
  */
 function turnActs(m, rec, last) {
   const here = m.id === (rec?.thread?.context_from_message_id ?? null);
@@ -401,9 +402,8 @@ function turnActs(m, rec, last) {
 
   if (m.role === 'user') {
     acts.push(`<button class="winAct" data-act="editMsg" data-msg="${m.id}" title="Rewrite this question and answer it again — everything after it is discarded">✎ EDIT</button>`);
-    if (m.id === last?.id) {
-      acts.push(`<button class="winAct" data-act="retryMsg" data-msg="${m.id}" title="This question never got an answer — ask again">↻ RETRY</button>`);
-    }
+    acts.push(`<button class="winAct" data-act="retryMsg" data-msg="${m.id}" title="Answer this question again, unchanged — everything after it is discarded">↻ ASK AGAIN</button>`);
+    acts.push(dropAct(m));
     return acts.join('');
   }
 
@@ -411,6 +411,7 @@ function turnActs(m, rec, last) {
     if (m.id === last?.id) {
       acts.push(`<button class="winAct" data-act="retryMsg" data-msg="${m.id}" title="Run this turn again">↻ RETRY</button>`);
     }
+    acts.push(dropAct(m));
     return acts.join('');
   }
 
@@ -422,8 +423,15 @@ function turnActs(m, rec, last) {
     acts.push(`<button class="winAct${m.has_ground_truth ? ' on' : ''}" data-act="groundTruth" data-msg="${m.id}" title="Compare this answer against the source document, line by line">⌕ ${m.has_ground_truth ? 'GROUND TRUTH' : 'CHECK'}</button>`);
   }
   acts.push(`<button class="winAct${m.saved ? ' on' : ''}" data-act="saveMsg" data-msg="${m.id}" title="Keep this answer for reuse in other records">${m.saved ? '★ SAVED' : '☆ SAVE'}</button>`);
+  acts.push(dropAct(m));
   return acts.join('');
 }
+
+/** Cut one turn out of the record. Last in every row, and the only red one. */
+const dropAct = (m) => `<button class="winAct quit" data-act="dropMsg" data-msg="${m.id}"
+    title="${m.role === 'user'
+      ? 'Remove this question and the answer under it — the rest of the record stays'
+      : 'Remove this answer and keep the question, so it can be asked again'}">✕ DELETE</button>`;
 
 function highlight(text, terms) {
   const safe = esc(text);
@@ -1121,6 +1129,7 @@ el.deck.addEventListener('click', (e) => {
   if (act === 'saveMsg') saveResponse(msgId, el2);
   if (act === 'groundTruth') groundTruth(id, msgId, el2);
   if (act === 'retryMsg') retryTurn(id, msgId);
+  if (act === 'dropMsg') dropMessage(id, msgId);
   if (act === 'startHere') setContextStart(id, msgId);
   if (act === 'startClear') setContextStart(id, null);
   if (act === 'editMsg') beginEdit(win, id, msgId);
@@ -2497,21 +2506,74 @@ async function sendFromComposer(id, win) {
   });
 }
 
-/** Run the tail of a record again. The server drops the failed reply itself. */
+/**
+ * Answer a question again. `msgId` is the question itself, or the failed answer
+ * under it — the server resolves either to the same turn.
+ *
+ * The turns this replaces are named rather than deleted from the page, so the
+ * retry does not appear underneath the failure it is retrying, and does not
+ * reappear if the window is rebuilt while it runs. The question comes back over
+ * the wire as a `user` frame, which is why hiding it here is safe.
+ */
 async function retryTurn(id, msgId) {
   const rec = recordCache.get(id);
-  const target = rec?.messages.find((m) => m.id === msgId);
+  const at = rec?.messages.findIndex((m) => m.id === msgId) ?? -1;
+  const target = at === -1 ? null : rec.messages[at];
 
-  // The turns this replaces are named rather than deleted from the page, so the
-  // retry does not appear underneath the failure it is retrying — and does not
-  // reappear if the window is rebuilt while it runs.
   const from = target?.role === 'assistant'
-    ? rec.messages[rec.messages.length - 2]?.id ?? msgId
+    ? rec.messages[at - 1]?.id ?? msgId
     : msgId;
+
+  const dropped = rec ? rec.messages.length - at - 1 : 0;
+  if (target?.role === 'user' && dropped > 1) {
+    const ok = await openModal({
+      title: 'ASK AGAIN',
+      what: `The answer it already has, and ${dropped - 1} later message(s), are discarded. `
+        + 'The question itself is unchanged.',
+      ok: 'ASK AGAIN',
+    });
+    if (ok == null) return;
+  }
 
   await runTurn(id, `/api/threads/${id}/messages/${msgId}/retry`, {
     model: viewOf(id).model || undefined,
   }, { replacesFrom: from });
+}
+
+/**
+ * Cut one turn out of a record without touching the rest of it.
+ *
+ * Deleting a question takes the answer under it too — the server pairs them,
+ * and the dialog says so, because a delete that quietly takes twice what it
+ * offered is a delete the user has to reconstruct from memory.
+ */
+async function dropMessage(id, msgId) {
+  if (sessions.has(id)) return toast(`REC ${pad(id)} is answering — halt it first`, 'err');
+
+  const rec = recordCache.get(id);
+  const at = rec?.messages.findIndex((m) => m.id === msgId) ?? -1;
+  if (at === -1) return;
+  const m = rec.messages[at];
+  const paired = m.role === 'user' && rec.messages[at + 1]?.role === 'assistant';
+
+  const ok = await openModal({
+    title: paired ? 'DELETE THIS EXCHANGE' : m.role === 'user' ? 'DELETE THIS QUESTION' : 'DELETE THIS ANSWER',
+    what: paired
+      ? 'The question and the answer under it go. Everything else in the record stays where it is. This cannot be undone.'
+      : m.role === 'user'
+        ? 'The question goes. Everything else in the record stays where it is. This cannot be undone.'
+        : 'The answer goes and the question stays, so it can be asked again. This cannot be undone.',
+    ok: 'DELETE', danger: true,
+  });
+  if (ok == null) return;
+
+  try {
+    const out = await api(`/api/messages/${msgId}`, { method: 'DELETE' });
+    await refreshArchive({ drop: id });
+    toast(out.unpinned
+      ? `Deleted — also detached from ${out.unpinned} conversation(s) that pinned it as a source`
+      : out.deleted.length === 1 ? 'Message deleted' : 'Exchange deleted');
+  } catch (err) { toast(`Delete failed — ${err.message}`, 'err'); }
 }
 
 async function beginEdit(win, id, msgId) {

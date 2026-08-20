@@ -645,7 +645,69 @@ export const pl = {
   /* ---- counted and numbered text ------------------------------------------ */
   /* Anything with a number in it cannot be a fixed key, so these run last and
      only when nothing matched whole. */
+  /* Cutting a turn out, and asking one again. Both exist on all three chat
+     surfaces, and each surface words the consequence in its own vocabulary —
+     "thread" on the deck, "record" in the grimoire, "this point" on a canvas. */
+  'Answer this question again — everything after it is discarded':
+    'Odpowiedz na to pytanie jeszcze raz — wszystko po nim przepada',
+  'Answer this question again, unchanged — everything after it is discarded':
+    'Odpowiedz na to pytanie jeszcze raz, bez zmian — wszystko po nim przepada',
+  'Ask this question again': 'Zadaj to pytanie jeszcze raz',
+  'Edit the question': 'Popraw pytanie',
+  'The question': 'Pytanie',
+  'Answered again from here.': 'Odpowiedź od tego miejsca jeszcze raz.',
+
+  'Remove this message from the thread': 'Usuń tę wiadomość z wątku',
+  'Remove this question and the answer under it — the rest of the record stays':
+    'Usuń to pytanie i odpowiedź pod nim — reszta zapisu zostaje',
+  'Remove this question and the answer under it — the rest of the conversation stays':
+    'Usuń to pytanie i odpowiedź pod nim — reszta rozmowy zostaje',
+  'Remove this answer and keep the question, so it can be asked again':
+    'Usuń tę odpowiedź, zostaw pytanie — będzie je można zadać jeszcze raz',
+
+  'Delete this exchange': 'Skasuj tę wymianę',
+  'Delete this question': 'Skasuj to pytanie',
+  'Delete this answer': 'Skasuj tę odpowiedź',
+  'The question and the answer under it are removed. Everything else in the thread stays where it is.':
+    'Pytanie i odpowiedź pod nim zostają usunięte. Reszta wątku zostaje na swoim miejscu.',
+  'The question is removed. Everything else in the thread stays where it is.':
+    'Pytanie zostaje usunięte. Reszta wątku zostaje na swoim miejscu.',
+  'The answer is removed and the question stays, so you can ask it again. Everything else in the thread stays where it is.':
+    'Odpowiedź zostaje usunięta, a pytanie zostaje — można je zadać jeszcze raz. Reszta wątku zostaje na swoim miejscu.',
+  'The question and the answer under it go. Everything else in the record stays where it is. This cannot be undone.':
+    'Pytanie i odpowiedź pod nim znikają. Reszta zapisu zostaje na swoim miejscu. Tego nie da się cofnąć.',
+  'The question goes. Everything else in the record stays where it is. This cannot be undone.':
+    'Pytanie znika. Reszta zapisu zostaje na swoim miejscu. Tego nie da się cofnąć.',
+  'The question and the answer under it go. Everything else on this point stays. This cannot be undone.':
+    'Pytanie i odpowiedź pod nim znikają. Reszta tego punktu zostaje. Tego nie da się cofnąć.',
+  'The question goes. Everything else on this point stays. This cannot be undone.':
+    'Pytanie znika. Reszta tego punktu zostaje. Tego nie da się cofnąć.',
+  'The answer goes and the question stays, so it can be asked again. This cannot be undone.':
+    'Odpowiedź znika, a pytanie zostaje — będzie je można zadać jeszcze raz. Tego nie da się cofnąć.',
+
+  'Deleted the message': 'Wiadomość skasowana',
+  'Deleted the exchange': 'Wymiana skasowana',
+  'Message deleted': 'Wiadomość skasowana',
+  'Exchange deleted': 'Wymiana skasowana',
+  'Wait for the turn to finish first': 'Poczekaj, aż tura się skończy',
+
+  /* Refusals from the server, shown verbatim in a toast. */
+  'Only the last answer can be retried — ask its question again instead.':
+    'Ponowić można tylko ostatnią odpowiedź — zamiast tego zadaj jej pytanie jeszcze raz.',
+  'That turn succeeded — send a new message instead.':
+    'Ta tura się udała — wyślij nową wiadomość.',
+
   '@patterns': [
+    [/^The answer it already has, and (\d+) later messages?, are discarded\. The question itself is unchanged\.$/,
+      'Odpowiedź, którą już ma, i późniejsze wiadomości ($1) przepadają. Samo pytanie zostaje bez zmian.'],
+    [/^The answer it already has, and (\d+) later message\(s\), are discarded\. The question itself is unchanged\.$/,
+      'Odpowiedź, którą już ma, i późniejsze wiadomości ($1) przepadają. Samo pytanie zostaje bez zmian.'],
+    [/^Answered again from here — (\d+) later message\(s\) are discarded\.$/,
+      'Odpowiedź od tego miejsca jeszcze raz — późniejsze wiadomości ($1) przepadają.'],
+    [/^Deleted — and detached from (\d+) conversations? that had it pinned as a source$/,
+      'Skasowane — i odpięte od rozmów ($1), które miały to przypięte jako źródło'],
+    [/^Deleted — also detached from (\d+) conversation\(s\) that pinned it as a source$/,
+      'Skasowane — i odpięte od rozmów ($1), które miały to przypięte jako źródło'],
     [/^(\d+) msg$/i, '$1 wiad.'],
     [/^(\d+) messages?$/i, '$1 wiad.'],
     [/^(\d+) sources?$/i, '$1 źr.'],

@@ -418,6 +418,13 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--accent); margi
 .acts button.act:hover:not(:disabled) { background: var(--hover); border-color: var(--line); color: var(--fg); }
 /* Retry is the whole point of a failed turn — never make the user hunt for it. */
 .acts button.act.retry { opacity: 1; color: var(--accent); border-color: var(--line); background: var(--accentSoft); }
+/* `.acts button.act` outranks the generic `button.danger`, so restate it here.
+   It stays hover-revealed like the rest — a delete that is always visible in a
+   row you click without looking is a delete that eventually gets clicked. */
+.acts button.act.danger { margin-left: auto; }
+.acts button.act.danger:hover:not(:disabled) {
+  background: var(--errSoft); border-color: var(--err); color: var(--err);
+}
 /* A saved response and a finished ground-truth check stay visibly marked
    rather than hover-revealed like the rest. */
 .acts button.act.saved,
