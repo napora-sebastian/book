@@ -374,6 +374,7 @@ export const pl = {
   'Fully grounded — nothing in this answer departs from the document.': 'W pełni oparte na źródle — nic w tej odpowiedzi nie odbiega od dokumentu.',
   'Halt this turn': 'Przerwij tę turę',
   'Deploy the Oracle': 'Wypuść Wyrocznię',
+  'Widen / restore': 'Poszerz / przywróć',
   'Model that searches and answers': 'Model, który szuka i odpowiada',
   'semantic retrieval over the archive': 'wyszukiwanie znaczeniowe po archiwum',
   'Give the Oracle particular records and graphs to read, instead of only what it finds by searching': 'Daj Wyroczni konkretne zapisy i grafy do przeczytania, zamiast tylko tego, co sama znajdzie',

@@ -508,6 +508,7 @@ body.oracleOpen .deck { right: 372px; }
   pointer-events: none;
 }
 body.oracleOpen .deckHint { right: 400px; }
+body.oracleWide .deckHint { right: 26px; }
 
 .voidNote {
   position: absolute; inset: 0; display: grid; place-content: center;
@@ -539,6 +540,7 @@ body.oracleOpen .deckHint { right: 400px; }
   scrollbar-width: thin; scrollbar-color: rgba(111, 230, 255, .35) transparent;
 }
 body.oracleOpen .index { padding-right: 400px; }
+body.oracleWide .index { padding-right: var(--s6); }
 .index::-webkit-scrollbar { width: 8px; }
 .index::-webkit-scrollbar-thumb { background: rgba(111, 230, 255, .3); }
 
@@ -586,6 +588,35 @@ body.oracleOpen .index { padding-right: 400px; }
   transition: transform .3s cubic-bezier(.22,.8,.3,1), opacity .3s;
 }
 .oracle.away { transform: translateX(calc(100% + 30px)); opacity: 0; pointer-events: none; }
+
+/* WIDEN — the same resize a record gets, for the same reason. A long answer
+   read out of a 360px column is a ladder of two-word lines. 80% of the console,
+   dead centre, above an expanded record (200) so the two never fight, below the
+   floating band (snackbars 260, popups 280, modals 300) so a sheet opened from
+   the Oracle still covers it. */
+.oracle.wide {
+  top: 50vh; left: 50vw; right: auto; bottom: auto;
+  width: 80vw; height: 80dvh;
+  transform: translate(-50%, -50%);
+  z-index: 210;
+  /* Centred, the cyan edge no longer marks the side the panel came from, so it
+     frames the whole thing instead. */
+  border: 1px solid var(--edgeSoft); border-top: 2px solid var(--cyan);
+  box-shadow: 0 30px 90px rgba(0, 0, 0, .55);
+}
+/* The base rule slides the column off its own edge; centred there is no edge to
+   slide to, so it dismisses like the dialog it now resembles. */
+.oracle.wide.away { transform: translate(-50%, -50%) scale(.97); }
+
+/* Width is for the panel, not for the prose: a line that runs the full 80vw is
+   as hard to read as one that runs 360px, in the other direction. The bubbles
+   keep a reading measure and the extra room goes to fewer, longer lines. */
+.oracle.wide .oracleTurn .said { max-width: min(94%, 82ch); }
+.oracle.wide .oracleIntro p, .oracle.wide .seeds { max-width: 82ch; }
+
+/* Widened, the Oracle overlays the console instead of standing beside it, so
+   everything that was making room for a 360px column stops. */
+body.oracleWide .deck { right: 0; }
 
 .oracleTop {
   display: flex; align-items: center; gap: var(--s3); flex-wrap: wrap;
@@ -731,6 +762,13 @@ body.oracleOpen .index { padding-right: 400px; }
     width: auto; height: 52dvh;
   }
   .oracle.away { transform: translateY(calc(100% + 30px)); }
+  /* Here the panel already spans the console, so the only thing left to give is
+     height — and height is what a long answer wanted in the first place. */
+  .oracle.wide {
+    top: auto; left: 26px; right: 26px; bottom: 26px;
+    width: auto; height: 84dvh; transform: none;
+  }
+  .oracle.wide.away { transform: translateY(calc(100% + 30px)); }
   body.oracleOpen .deck { right: 0; }
 
   /* Retarget the window box, not `width`: the centring margin is computed from
@@ -900,6 +938,7 @@ body.oracleOpen .index { padding-right: 400px; }
   pointer-events: none;
 }
 body.oracleOpen .snacks { left: calc(50% - 190px); }
+body.oracleWide .snacks { left: 50%; }
 
 .snack {
   display: flex; align-items: center; gap: var(--s2);
@@ -1418,6 +1457,13 @@ body.oracleOpen .snacks { left: calc(50% - 190px); }
     padding-bottom: env(safe-area-inset-bottom);
   }
   .oracle.away { transform: translateY(calc(100% + 30px)); }
+  /* Full-bleed like the stowed sheet, not a floating box: the base .wide rule
+     puts a 1px frame back on, and a 1px frame against the screen edge is a
+     seam. */
+  .oracle.wide {
+    left: 0; right: 0; bottom: 0; height: 92dvh;
+    border: 0; border-top: 2px solid var(--cyan); box-shadow: none;
+  }
   .oracleTop { flex-wrap: wrap; padding: var(--s2) var(--s3); }
   .oracleSub { display: none; }
   .oracleTop .hudSelect { max-width: 96px; }

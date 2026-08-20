@@ -31,6 +31,7 @@ const el = {
   oraclePins: $('oraclePins'),
   oracleStop: $('oracleStop'), oracleModel: $('oracleModel'),
   oracleToggle: $('oracleToggle'), collapseOracle: $('collapseOracle'), showOracle: $('showOracle'),
+  wideOracle: $('wideOracle'),
   traffic: $('traffic'),
 };
 
@@ -1362,6 +1363,29 @@ const stowOracle = () => {
 el.oracleToggle.addEventListener('click', () => (el.oracle.classList.contains('away') ? openOracle() : stowOracle()));
 el.collapseOracle.addEventListener('click', stowOracle);
 el.showOracle.addEventListener('click', openOracle);
+
+/**
+ * The Oracle answers at length out of a 360px column, which turns a paragraph
+ * into a ladder of two-word lines. Widening is the same move a record makes:
+ * the panel takes most of the console and everything else stays where it was,
+ * so it is a resize rather than a mode. The state survives stowing, the way the
+ * deck's expanded state survives travelling.
+ */
+const setOracleWide = (on) => {
+  el.oracle.classList.toggle('wide', on);
+  document.body.classList.toggle('oracleWide', on);
+  el.wideOracle.textContent = on ? '⤡' : '⤢';
+  el.wideOracle.setAttribute('aria-pressed', String(on));
+};
+el.wideOracle.addEventListener('click', () => setOracleWide(!el.oracle.classList.contains('wide')));
+
+// Double-clicking the header widens, the way double-clicking a record's title
+// bar expands it. Not on the controls: a double-tap on PIN SOURCES means two
+// clicks on PIN SOURCES.
+el.oracle.querySelector('.oracleTop').addEventListener('dblclick', (e) => {
+  if (e.target.closest('button, select, input')) return;
+  setOracleWide(!el.oracle.classList.contains('wide'));
+});
 
 // On a phone the Oracle is a bottom sheet rather than a column beside the deck,
 // so an Oracle that is open on arrival is an Oracle covering the archive you
