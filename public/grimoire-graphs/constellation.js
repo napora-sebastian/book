@@ -34,7 +34,7 @@
 import {
   attachSlashMenu, askWhatToSuggest, streamSuggestion, suggestionBox,
 } from '../tools-ui.js';
-import { sourceListHtml, sourceSearchHtml, wireSourceList } from '../source-picker.js';
+import { sourceListHtml, sourceSearchHtml, wireSourceList, tagHtml } from '../source-picker.js';
 
 /* The whole view, built once, off-document. Held together by `data-el` rather
    than ids: mounted over a page that has its own #modal and #snacks, ids would
@@ -1198,7 +1198,8 @@ async function refreshSources() {
     if (p.attached) {
       return `
         <div class="srcRow attached ${p.kind}">
-          <span class="srcGlyph">${p.kind === 'graph' ? '⁂' : '◈'}</span>
+          <span class="srcGlyph">${p.kind === 'graph' ? '⁂' : p.kind === 'note' ? '▪' : '◈'}</span>
+          ${tagHtml(p.kind, p.kind === 'thread' ? 'CHAT' : null)}
           <span class="srcName" title="Attached by hand — ${esc(p.name)}${p.detail ? ` — ${esc(p.detail)}` : ''}">
             + ${esc(p.name)}
           </span>
@@ -1217,6 +1218,7 @@ async function refreshSources() {
     return `
       <div class="srcRow ${p.kind}">
         <span class="srcGlyph">${p.kind === 'document' ? '◆' : p.kind === 'note' ? '▪' : '◈'}</span>
+        ${tagHtml(p.kind, p.kind === 'thread' ? 'CHAT' : null)}
         <span class="srcName" title="${esc(p.name)}${p.detail ? ` — ${esc(p.detail)}` : ''}">
           ${direct ? '' : '↳ '}${esc(p.name)}${p.version != null ? ` v${p.version}` : ''}
         </span>
@@ -1245,10 +1247,13 @@ async function refreshSources() {
     .map((a) => {
       const why = a.kind === 'graph'
         ? (a.points ? 'nothing in it to read' : 'empty graph')
-        : (a.messages ? 'already read through a line' : 'nothing said in it yet');
+        : a.kind === 'note' ? 'a heading — it holds no text of its own'
+          : a.kind === 'message' ? 'that answer is empty'
+            : (a.messages ? 'already read through a line' : 'nothing said in it yet');
       return `
         <div class="srcRow attached idle ${a.kind}">
-          <span class="srcGlyph">${a.kind === 'graph' ? '⁂' : '◈'}</span>
+          <span class="srcGlyph">${a.kind === 'graph' ? '⁂' : a.kind === 'note' ? '▪' : '◈'}</span>
+          ${tagHtml(a.kind, a.kind === 'thread' ? 'CHAT' : null)}
           <span class="srcName" title="Attached, but carries nothing — ${esc(why)}">+ ${esc(a.title ?? '—')}</span>
           <span class="srcSize">${esc(why)}</span>
           <button class="turnAct" data-detach="${a.kind}:${a.ref_id}" title="Stop reading this">✕</button>
@@ -2127,6 +2132,7 @@ async function pickExtraSources(threadId) {
           records: 'CONVERSATIONS', graphs: 'GRAPHS', notes: 'NOTES',
           none: 'NOTHING ELSE TO READ — IT IS ALL ALREADY UPSTREAM OF THIS POINT.',
         },
+        tags: { thread: 'CHAT' },
       })}`,
     acts: [
       {

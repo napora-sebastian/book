@@ -44,6 +44,8 @@ export const SKIP_SEL = [
   '.previewEdit', '.oracleTurn.you', '.oracleAns',
   '.noteRead', '.toolSay', '.toolList',                                         // notes, and the tool log
   '.srcMeta', '.srcWhy', '.srcFindSay',                                         // the source picker's own text
+  /* .srcTag is deliberately NOT here: it names a kind of thing — CHAT, NOTE,
+     GRAPH — which is a label like any other and should be translated. */
   '.suggestBody', '.suggestAsk', '.slashHint',                                  // suggestions, and the tool menu
   '.diffView', '.dText', '.dLine', '.hunk',                                     // diffs are document text
   '.nodeTitle', '.nodePreview', '.nodeLive', '.nodeStage',                      // graph cards

@@ -33,13 +33,48 @@ const clip = (s, n) => {
 /** A key that identifies one tickable thing across the whole list. */
 export const keyOf = (kind, id) => `${kind}:${id}`;
 
+/* ------------------------------------------------------------------- tags
+
+   Six things can be a source now, and a glyph does not say which. ◈ and ▪ and
+   ⁂ are learnable, but nobody should have to learn them to know whether they
+   are about to attach one paragraph or a whole book — and the four grains are
+   the entire point of the list. So every row carries the word as well.
+
+   The vocabulary is overridable because the app deliberately calls the same
+   object different things in different views: the deck's "conversation" is the
+   grimoire's "record". A tag that disagrees with the heading above it is worse
+   than no tag.
+   ------------------------------------------------------------------------- */
+
+export const TAGS = {
+  thread: 'CHAT',
+  note: 'NOTE',
+  graph: 'GRAPH',
+  message: 'ANSWER',
+  question: 'QUESTION',
+  document: 'BOOK',
+};
+
+/**
+ * The tag for one row. `kind` is the source kind; `as` overrides the word.
+ *
+ * `data-kind` is what the stylesheets colour off, and it stays the machine
+ * kind even when the word is overridden — so a canvas calling a thread a
+ * CONVERSATION still gets the same colour as the deck calling it a CHAT.
+ */
+export const tagHtml = (kind, as = null) =>
+  `<span class="srcTag" data-kind="${kind}">${esc(as ?? TAGS[kind] ?? kind)}</span>`;
+
 /* --------------------------------------------------------------- one row */
 
 /**
  * `on` maps "kind:id" → the saved row, so a source already attached comes back
  * ticked, in the position it was saved in, with the mode it was saved with.
  */
-function rowHtml({ kind, id, glyph, name, meta, expandable = false, mode = null, cur = null, why = null, depth = 0 }) {
+function rowHtml({
+  kind, id, glyph, name, meta, expandable = false, mode = null,
+  cur = null, why = null, depth = 0, tag = null,
+}) {
   const ticked = Boolean(cur);
   return `
     <div class="srcRow${ticked ? ' on' : ''}${why ? ' picked' : ''}" data-key="${kind}:${id}" data-depth="${depth}">
@@ -53,7 +88,10 @@ function rowHtml({ kind, id, glyph, name, meta, expandable = false, mode = null,
           : '<span class="srcTwisty spacer"></span>'}
         <span class="srcGlyph">${glyph}</span>
         <span class="srcText">
-          <span class="srcName">${esc(name)}</span>
+          <span class="srcTop">
+            ${tagHtml(kind, tag)}
+            <span class="srcName">${esc(name)}</span>
+          </span>
           <span class="srcMeta">${meta}</span>
           ${why ? `<span class="srcWhy" data-i18n-skip>✦ ${esc(why)}</span>` : ''}
         </span>
@@ -77,12 +115,13 @@ function rowHtml({ kind, id, glyph, name, meta, expandable = false, mode = null,
  * the reason the search chose them, which is what turns a suggestion into
  * something the user can judge rather than just accept.
  */
-export function sourceListHtml(catalog, on, { picks = new Map(), heads = {} } = {}) {
+export function sourceListHtml(catalog, on, { picks = new Map(), heads = {}, tags = {} } = {}) {
   const rank = (kind, x) => (on.has(keyOf(kind, x.id)) ? on.get(keyOf(kind, x.id)).position : Infinity);
   const H = {
     records: 'RECORDS', graphs: 'GRAPHS', notes: 'NOTES',
     none: 'Nothing here yet.', ...heads,
   };
+  const T = { ...TAGS, ...tags };
 
   const records = [...(catalog.threads ?? [])]
     .sort((a, b) => rank('thread', a) - rank('thread', b))
@@ -94,6 +133,7 @@ export function sourceListHtml(catalog, on, { picks = new Map(), heads = {} } = 
       // A record with turns can be opened and read one answer at a time.
       expandable: t.messages > 0,
       mode: true,
+      tag: T.thread,
       cur: on.get(keyOf('thread', t.id)),
       why: picks.get(keyOf('thread', t.id)),
     })).join('');
@@ -105,6 +145,7 @@ export function sourceListHtml(catalog, on, { picks = new Map(), heads = {} } = 
       name: n.label || clip(n.text, 60) || 'untitled note',
       meta: `${num(n.chars)} CHARS · ON ⁂ ${esc(n.graph_title)}${
         n.src_filename ? ` · ◆ ${esc(n.src_filename)}` : ''}`,
+      tag: T.note,
       cur: on.get(keyOf('note', n.id)),
       why: picks.get(keyOf('note', n.id)),
     })).join('');
@@ -119,22 +160,25 @@ export function sourceListHtml(catalog, on, { picks = new Map(), heads = {} } = 
       // book is a different proposition from a note.
       meta: `${g.points} POINT${g.points === 1 ? '' : 'S'} · ${g.lines} LINE${g.lines === 1 ? '' : 'S'} · ~${
         num(g.chars)} CHARS${g.points ? '' : ' · EMPTY, CARRIES NOTHING'}`,
+      tag: T.graph,
       expandable: g.points > 0,
       cur: on.get(keyOf('graph', g.id)),
       why: picks.get(keyOf('graph', g.id)),
     })).join('');
 
   return `
-    <h4 class="srcHead">${H.records}</h4>
-    ${records || `<p class="srcNone">${H.none}</p>`}
-    ${notes ? `<h4 class="srcHead">${H.notes}</h4>${notes}` : ''}
-    <h4 class="srcHead">${H.graphs}</h4>
-    ${graphs || `<p class="srcNone">${H.none}</p>`}`;
+    <div class="srcPicker">
+      <h4 class="srcHead">${H.records}</h4>
+      ${records || `<p class="srcNone">${H.none}</p>`}
+      ${notes ? `<h4 class="srcHead">${H.notes}</h4>${notes}` : ''}
+      <h4 class="srcHead">${H.graphs}</h4>
+      ${graphs || `<p class="srcNone">${H.none}</p>`}
+    </div>`;
 }
 
 /** The search box that goes above the list. */
 export const sourceSearchHtml = (placeholder = 'what should this conversation have read?') => `
-  <div class="srcFind">
+  <div class="srcPicker srcFind">
     <input type="text" class="srcNeed" placeholder="${esc(placeholder)}" />
     <button type="button" class="srcFindGo">✦ FIND</button>
     <span class="srcFindSay"></span>
@@ -156,6 +200,7 @@ const CHILD = {
           name: p.label || clip(p.preview, 60) || 'untitled note',
           meta: p.chars ? `${num(p.chars)} CHARS · ${esc(clip(p.preview, 90))}`
             : 'HEADING — CARRIES NOTHING ITSELF',
+          tag: p.chars ? null : 'HEADING',
           cur: on.get(keyOf('note', p.id)),
           why: picks.get(keyOf('note', p.id)),
         });
@@ -165,7 +210,7 @@ const CHILD = {
           kind: 'thread', id: p.thread_id, glyph: '◈', depth: 1,
           name: p.label || p.thread_title || 'untitled',
           meta: `${p.messages} MSG · ON THIS GRAPH`,
-          expandable: p.messages > 0, mode: true,
+          expandable: p.messages > 0, mode: true, tag: null,
           cur: on.get(keyOf('thread', p.thread_id)),
           why: picks.get(keyOf('thread', p.thread_id)),
         });
@@ -178,7 +223,10 @@ const CHILD = {
             <span class="srcTwisty spacer"></span><span class="srcTwisty spacer"></span>
             <span class="srcGlyph">◆</span>
             <span class="srcText">
-              <span class="srcName">${esc(p.label || p.doc_filename || 'missing book')}</span>
+              <span class="srcTop">
+                ${tagHtml('document')}
+                <span class="srcName">${esc(p.label || p.doc_filename || 'missing book')}</span>
+              </span>
               <span class="srcMeta">${num(p.doc_chars)} CHARS · A BOOK — READ IT BY TAKING THE GRAPH</span>
             </span>
           </span>
@@ -189,8 +237,11 @@ const CHILD = {
     url: (id) => `/api/source-catalog/thread/${id}`,
     rows: (data, on, picks) => (data.messages ?? []).map((m) => rowHtml({
       kind: 'message', id: m.id, glyph: m.role === 'user' ? '▸' : '◈', depth: 1,
-      name: `${m.role === 'user' ? 'Question' : 'Answer'} · ${clip(m.preview, 70)}`,
+      name: clip(m.preview, 80),
       meta: `${num(m.chars)} CHARS${m.model ? ` · ${esc(m.model)}` : ''}${m.error ? ' · FAILED' : ''}`,
+      // The tag carries the whole distinction here, so it does not have to be
+      // repeated in the name: one row is what was asked, the next what came back.
+      tag: m.role === 'user' ? TAGS.question : TAGS.message,
       cur: on.get(keyOf('message', m.id)),
       why: picks.get(keyOf('message', m.id)),
     })).join(''),

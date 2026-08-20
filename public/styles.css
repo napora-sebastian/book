@@ -1243,61 +1243,88 @@ tr.dDel .wch { background: var(--diffDelWord); }
    parent already carries them.
    ------------------------------------------------------------------------- */
 
-.srcFind {
+.srcPicker .srcFind {
   display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
   margin: 0 0 var(--s4);
 }
-.srcNeed {
+.srcPicker .srcNeed {
   flex: 1; min-width: 220px; height: var(--ctl, 34px);
   padding: 0 10px; font-size: 13px;
   background: var(--bg); color: var(--fg);
   border: 1px solid var(--line); border-radius: var(--radiusSm);
 }
-.srcNeed:focus { outline: none; border-color: var(--accent); }
-.srcFindGo {
+.srcPicker .srcNeed:focus { outline: none; border-color: var(--accent); }
+.srcPicker .srcFindGo {
   height: var(--ctl, 34px); padding: 0 14px; cursor: pointer; white-space: nowrap;
   font-size: 12.5px; border-radius: var(--radiusSm);
   background: var(--accent); border: 1px solid var(--accent); color: #fff;
 }
-.srcFindGo:disabled { opacity: .6; cursor: default; }
-.srcFindSay { flex-basis: 100%; font-size: 12px; color: var(--dim); }
+.srcPicker .srcFindGo:disabled { opacity: .6; cursor: default; }
+.srcPicker .srcFindSay { flex-basis: 100%; font-size: 12px; color: var(--dim); }
 
-.srcHead {
+.srcPicker .srcHead {
   margin: var(--s4) 0 var(--s2); font-size: 12px; font-weight: 600;
   text-transform: uppercase; letter-spacing: .06em; color: var(--dim);
 }
-.srcNone { margin: 0 0 var(--s2); font-size: 12.5px; color: var(--dim); }
+.srcPicker .srcNone { margin: 0 0 var(--s2); font-size: 12.5px; color: var(--dim); }
 
-.srcRow {
+.srcPicker .srcRow {
   display: flex; align-items: center; gap: 8px;
   padding: 7px 10px; margin-bottom: 4px;
   border: 1px solid var(--line); border-radius: var(--radiusSm);
   background: var(--panel);
 }
-.srcRow.on { border-color: var(--accent); background: var(--accentSoft); }
+.srcPicker .srcRow.on { border-color: var(--accent); background: var(--accentSoft); }
 /* Chosen by the search rather than by the user — worth a mark until they have
    looked at it, since a tick they did not make is the one to be sure about. */
-.srcRow.picked { box-shadow: inset 2px 0 0 var(--accent); }
-.srcRow[data-depth="1"] { margin-left: var(--s5); }
-.srcMain { display: flex; align-items: center; gap: 8px; flex: 1; min-width: 0; cursor: pointer; }
-.srcTwisty {
+.srcPicker .srcRow.picked { box-shadow: inset 2px 0 0 var(--accent); }
+.srcPicker .srcRow[data-depth="1"] { margin-left: var(--s5); }
+.srcPicker .srcMain { display: flex; align-items: center; gap: 8px; flex: 1; min-width: 0; cursor: pointer; }
+.srcPicker .srcTwisty {
   flex: none; width: 18px; height: 18px; padding: 0; cursor: pointer;
   background: transparent; border: none; color: var(--dim); font-size: 11px;
 }
-.srcTwisty.spacer { cursor: default; }
-.srcGlyph { flex: none; width: 1.1em; text-align: center; color: var(--dim); }
-.srcText { display: flex; flex-direction: column; gap: 1px; min-width: 0; flex: 1; }
-.srcName {
+.srcPicker .srcTwisty.spacer { cursor: default; }
+.srcPicker .srcGlyph { flex: none; width: 1.1em; text-align: center; color: var(--dim); }
+.srcPicker .srcText { display: flex; flex-direction: column; gap: 1px; min-width: 0; flex: 1; }
+.srcPicker .srcName {
   font-size: 13.5px; color: var(--fg);
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
-.srcMeta { font: 11px var(--mono); color: var(--dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.srcWhy { font-size: 11.5px; color: var(--accent); }
-.srcMode { flex: none; height: var(--ctlSm); font-size: 12px; }
+.srcPicker .srcMeta { font: 11px var(--mono); color: var(--dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.srcPicker .srcWhy { font-size: 11.5px; color: var(--accent); }
+.srcPicker .srcMode { flex: none; height: var(--ctlSm); font-size: 12px; }
 
-.srcKids { margin-bottom: 4px; }
-.srcKids.hidden { display: none; }
+.srcPicker .srcKids { margin-bottom: 4px; }
+.srcPicker .srcKids.hidden { display: none; }
 /* The parent carries these already — shown, so the shape stays legible, but
    not tickable, because ticking one would pay for the same text twice. */
-.srcKids.covered { opacity: .45; }
-.srcKids.covered .srcRow { pointer-events: none; }
+.srcPicker .srcKids.covered { opacity: .45; }
+.srcPicker .srcKids.covered .srcRow { pointer-events: none; }
+
+/* --- what kind of thing a source is ---------------------------------------
+
+   A glyph is learnable; a word does not have to be. The four grains are the
+   whole point of the picker, so every row says which one it is — and each kind
+   keeps one colour wherever it appears, so the tag is recognisable before it
+   is read.
+   ------------------------------------------------------------------------- */
+
+.srcPicker .srcTop { display: flex; align-items: baseline; gap: 7px; min-width: 0; }
+.srcPicker .srcTop .srcName { min-width: 0; }
+.srcPicker .srcTag {
+  flex: none;
+  font: 9.5px var(--mono); letter-spacing: .1em; text-transform: uppercase;
+  padding: 2px 5px; border-radius: 3px;
+  border: 1px solid currentColor; opacity: .9;
+}
+.srcPicker .srcTag[data-kind="thread"]   { color: var(--accent); }
+.srcPicker .srcTag[data-kind="note"]     { color: #2f8f63; }
+.srcPicker .srcTag[data-kind="graph"]    { color: var(--warn); }
+.srcPicker .srcTag[data-kind="message"]  { color: #7a5cc4; }
+.srcPicker .srcTag[data-kind="document"] { color: var(--dim); }
+
+@media (prefers-color-scheme: dark) {
+  .srcPicker .srcTag[data-kind="note"]    { color: #7fd6a8; }
+  .srcPicker .srcTag[data-kind="message"] { color: #b39ff0; }
+}

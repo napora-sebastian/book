@@ -2780,7 +2780,7 @@ async function openSourcePicker(id) {
         ? `<div class="notice">NOW CARRYING ${mine.summary.chars.toLocaleString()} CHARS INTO EVERY QUESTION IN THIS RECORD.</div>`
         : ''}
       ${sourceSearchHtml('what should this record have read? — the archive is searched for you')}
-      ${sourceListHtml(catalog, on)}`,
+      ${sourceListHtml(catalog, on, { tags: { thread: 'RECORD' } })}`,
     acts: [{
       label: 'SAVE SOURCES',
       tone: 'go',
@@ -2835,7 +2835,7 @@ async function openOraclePins() {
          found it. A graph and a note can only reach it this way: search matches transcripts, and
          neither of those is one.</p>
       ${sourceSearchHtml('what should the Oracle be holding while it answers?')}
-      ${sourceListHtml(catalog, on)}`,
+      ${sourceListHtml(catalog, on, { tags: { thread: 'RECORD' } })}`,
     acts: [{
       label: 'PIN THESE',
       tone: 'go',

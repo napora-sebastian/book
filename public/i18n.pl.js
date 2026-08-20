@@ -441,6 +441,18 @@ export const pl = {
   /* The source picker. Vocabulary: source → źródło, record → zapis,
      note → notatka, graph → graf, whole → całość. */
   'Find': 'Znajdź',
+
+  /* The kind tags on a source row. Short on purpose — they sit on the row, not
+     in a sentence — and the Polish has to stay short too or the row wraps. */
+  'Chat': 'Rozmowa',
+  'Record': 'Zapis',
+  'Conversation': 'Rozmowa',
+  'Note': 'Notatka',
+  'Graph': 'Graf',
+  'Answer': 'Odpowiedź',
+  'Question': 'Pytanie',
+  'Book': 'Księga',
+  'Heading': 'Nagłówek',
   'Reading…': 'Czytam…',
   'what should this conversation have read?': 'co ta rozmowa powinna była przeczytać?',
   'what should this record have read? — the archive is searched for you': 'co ten zapis powinien był przeczytać? — archiwum zostanie przeszukane za ciebie',
