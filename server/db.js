@@ -144,6 +144,26 @@ db.exec(`
     created_at  TEXT    NOT NULL DEFAULT (datetime('now'))
   );
 
+  -- What the model proposed about one answer, on the reader's instruction.
+  --
+  -- Not a message: a suggestion is ABOUT a turn rather than a turn of its own,
+  -- and threading it into the transcript would make the next question read a
+  -- conversation that never happened. It hangs under the answer instead, and
+  -- goes with it if the answer is deleted.
+  --
+  -- Not UNIQUE on message_id either — one answer can be asked for several
+  -- different things ("another category", "a shorter title", "a counter-
+  -- argument"), and each is worth keeping beside the others.
+  CREATE TABLE IF NOT EXISTS suggestions (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    message_id  INTEGER NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
+    ask         TEXT    NOT NULL,
+    content     TEXT    NOT NULL,
+    model       TEXT,
+    created_at  TEXT    NOT NULL DEFAULT (datetime('now'))
+  );
+  CREATE INDEX IF NOT EXISTS idx_suggestions_message ON suggestions(message_id, id);
+
   CREATE INDEX IF NOT EXISTS idx_traces_thread ON traces(thread_id, id);
   CREATE INDEX IF NOT EXISTS idx_traces_message ON traces(message_id);
   CREATE INDEX IF NOT EXISTS idx_traces_created ON traces(created_at DESC);
@@ -591,7 +611,8 @@ export function getMessages(threadId) {
     .prepare(
       `SELECT m.*,
               EXISTS(SELECT 1 FROM saved_responses sr WHERE sr.message_id = m.id) AS saved,
-              EXISTS(SELECT 1 FROM ground_truth_checks g WHERE g.message_id = m.id) AS has_ground_truth
+              EXISTS(SELECT 1 FROM ground_truth_checks g WHERE g.message_id = m.id) AS has_ground_truth,
+              (SELECT COUNT(*) FROM suggestions s WHERE s.message_id = m.id) AS suggestion_count
          FROM messages m WHERE m.thread_id = ? ORDER BY m.id ASC`,
     )
     .all(threadId);
@@ -692,6 +713,52 @@ export function deleteSavedResponse(id) {
 }
 
 /* ----------------------------------------------------------- ground truth */
+
+/* ------------------------------------------------------------- suggestions */
+
+export function addSuggestion({ messageId, ask, content, model }) {
+  const { lastInsertRowid } = db
+    .prepare('INSERT INTO suggestions (message_id, ask, content, model) VALUES (?, ?, ?, ?)')
+    .run(messageId, ask, content, model ?? null);
+  return db.prepare('SELECT * FROM suggestions WHERE id = ?').get(Number(lastInsertRowid));
+}
+
+export function listSuggestions(messageId) {
+  return db.prepare('SELECT * FROM suggestions WHERE message_id = ? ORDER BY id ASC').all(messageId);
+}
+
+/**
+ * Every suggestion filed under any answer in one conversation.
+ *
+ * The canvas rebuilds its whole transcript in one string, so it cannot fetch
+ * these per message the way the deck does — a render landing mid-flight would
+ * wipe the ones that had arrived. One query, handed over with the messages.
+ */
+export function listThreadSuggestions(threadId) {
+  return db
+    .prepare(
+      `SELECT s.* FROM suggestions s
+         JOIN messages m ON m.id = s.message_id
+        WHERE m.thread_id = ?
+        ORDER BY s.id ASC`,
+    )
+    .all(threadId);
+}
+
+export function deleteSuggestion(id) {
+  return db.prepare('DELETE FROM suggestions WHERE id = ?').run(id).changes > 0;
+}
+
+/** The last answer in a thread — what a suggestion attaches to by default. */
+export function lastAssistantMessage(threadId) {
+  return db
+    .prepare(
+      `SELECT * FROM messages
+        WHERE thread_id = ? AND role = 'assistant' AND error IS NULL
+        ORDER BY id DESC LIMIT 1`,
+    )
+    .get(threadId) ?? null;
+}
 
 export function getGroundTruthCheck(messageId) {
   const row = db.prepare('SELECT * FROM ground_truth_checks WHERE message_id = ?').get(messageId);
@@ -921,19 +988,38 @@ db.exec(`
     updated_at  TEXT    NOT NULL DEFAULT (datetime('now'))
   );
 
-  -- One point on the canvas. Exactly one of document_id / thread_id is set,
-  -- and both are ON DELETE CASCADE: a node pointing at a deleted thread would
-  -- be a line to nowhere, so it goes with it.
+  -- One point on the canvas.
+  --
+  --   document  a book, at a version. Points at documents(id).
+  --   thread    a conversation. Points at threads(id).
+  --   note      a piece of text that is not either of those — a category, a
+  --             passage lifted out of a book, a heading in an outline. It is
+  --             the one kind that OWNS its content instead of pointing at it,
+  --             because there is nothing in the archive for it to point at
+  --             until the user decides there should be.
+  --
+  -- document_id / thread_id are ON DELETE CASCADE: a node pointing at a deleted
+  -- thread would be a line to nowhere, so it goes with it. A note has neither
+  -- set and so survives everything — it is its own record.
   CREATE TABLE IF NOT EXISTS graph_nodes (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
     graph_id    INTEGER NOT NULL REFERENCES graphs(id) ON DELETE CASCADE,
-    kind        TEXT    NOT NULL CHECK (kind IN ('document','thread')),
+    kind        TEXT    NOT NULL CHECK (kind IN ('document','thread','note')),
     document_id INTEGER REFERENCES documents(id) ON DELETE CASCADE,
     thread_id   INTEGER REFERENCES threads(id)   ON DELETE CASCADE,
     -- Which version of the book this point *is*. NULL follows the newest, a
     -- number pins it — so two branches off one book can be answered from two
     -- different drafts of it at the same time.
     doc_version INTEGER,
+    -- A note's body. NULL on every other kind.
+    text        TEXT,
+    -- Where a note was lifted from, kept separately from document_id so that a
+    -- note quoting a book does not count as the book standing on this canvas.
+    -- ON DELETE SET NULL, not CASCADE: deleting the book must not silently take
+    -- the reader's own categorisation of it with it.
+    src_document_id INTEGER REFERENCES documents(id) ON DELETE SET NULL,
+    src_from    INTEGER,
+    src_to      INTEGER,
     label       TEXT,
     x           REAL    NOT NULL DEFAULT 0,
     y           REAL    NOT NULL DEFAULT 0,
@@ -964,6 +1050,60 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_graph_edges_target ON graph_edges(target_id);
   CREATE INDEX IF NOT EXISTS idx_graph_edges_source ON graph_edges(source_id);
 `);
+
+/* A store that already holds graphs was built before notes existed, and SQLite
+   cannot relax a CHECK constraint in place — the `kind IN ('document','thread')`
+   written into that table is part of its definition. So the table is rebuilt,
+   once, guarded on its own schema text: the copy carries every existing point
+   across unchanged and the new columns arrive empty, which is exactly what they
+   mean on a document or a thread.
+
+   Foreign keys go off for the swap. graph_edges references graph_nodes, and
+   dropping the old table with them on would either refuse or leave the lines
+   dangling half-way through. */
+const NODES_SQL = db
+  .prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'graph_nodes'")
+  .get()?.sql ?? '';
+
+if (NODES_SQL && !NODES_SQL.includes("'note'")) {
+  db.exec('PRAGMA foreign_keys = OFF');
+  try {
+    db.exec(`
+      BEGIN;
+      CREATE TABLE graph_nodes_new (
+        id          INTEGER PRIMARY KEY AUTOINCREMENT,
+        graph_id    INTEGER NOT NULL REFERENCES graphs(id) ON DELETE CASCADE,
+        kind        TEXT    NOT NULL CHECK (kind IN ('document','thread','note')),
+        document_id INTEGER REFERENCES documents(id) ON DELETE CASCADE,
+        thread_id   INTEGER REFERENCES threads(id)   ON DELETE CASCADE,
+        doc_version INTEGER,
+        text        TEXT,
+        src_document_id INTEGER REFERENCES documents(id) ON DELETE SET NULL,
+        src_from    INTEGER,
+        src_to      INTEGER,
+        label       TEXT,
+        x           REAL    NOT NULL DEFAULT 0,
+        y           REAL    NOT NULL DEFAULT 0,
+        created_at  TEXT    NOT NULL DEFAULT (datetime('now'))
+      );
+      INSERT INTO graph_nodes_new
+             (id, graph_id, kind, document_id, thread_id, doc_version, label, x, y, created_at)
+      SELECT  id, graph_id, kind, document_id, thread_id, doc_version, label, x, y, created_at
+        FROM graph_nodes;
+      DROP TABLE graph_nodes;
+      ALTER TABLE graph_nodes_new RENAME TO graph_nodes;
+      CREATE INDEX IF NOT EXISTS idx_graph_nodes_graph ON graph_nodes(graph_id);
+      CREATE INDEX IF NOT EXISTS idx_graph_nodes_thread ON graph_nodes(thread_id);
+      CREATE INDEX IF NOT EXISTS idx_graph_nodes_document ON graph_nodes(document_id);
+      COMMIT;
+    `);
+  } catch (err) {
+    db.exec('ROLLBACK');
+    throw err;
+  } finally {
+    db.exec('PRAGMA foreign_keys = ON');
+  }
+}
 
 const touchGraph = (id) =>
   db.prepare("UPDATE graphs SET updated_at = datetime('now') WHERE id = ?").run(id);
@@ -1044,10 +1184,16 @@ export function listGraphNodes(graphId) {
                 WHERE n2.graph_id <> n.graph_id
                   AND ((n.document_id IS NOT NULL AND n2.document_id = n.document_id)
                     OR (n.thread_id   IS NOT NULL AND n2.thread_id   = n.thread_id)))
-                                                           AS other_graphs
+                                                           AS other_graphs,
+              -- A note's provenance: the book a passage was lifted out of, if
+              -- it was lifted out of one. Named apart from doc_filename so a
+              -- card can say "from Chapter 3.docx" without pretending the book
+              -- itself is standing here.
+              sd.filename      AS src_filename
          FROM graph_nodes n
-         LEFT JOIN documents d ON d.id = n.document_id
-         LEFT JOIN threads   t ON t.id = n.thread_id
+         LEFT JOIN documents d  ON d.id  = n.document_id
+         LEFT JOIN documents sd ON sd.id = n.src_document_id
+         LEFT JOIN threads   t  ON t.id  = n.thread_id
         WHERE n.graph_id = ?
         ORDER BY n.id ASC`,
     )
@@ -1058,22 +1204,34 @@ export function getGraphNode(id) {
   return db.prepare('SELECT * FROM graph_nodes WHERE id = ?').get(id) ?? null;
 }
 
-export function addGraphNode({ graphId, kind, documentId, threadId, docVersion, label, x, y }) {
+export function addGraphNode({
+  graphId, kind, documentId, threadId, docVersion, label, x, y,
+  text = null, srcDocumentId = null, srcFrom = null, srcTo = null,
+}) {
   const { lastInsertRowid } = db
     .prepare(
-      `INSERT INTO graph_nodes (graph_id, kind, document_id, thread_id, doc_version, label, x, y)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO graph_nodes
+         (graph_id, kind, document_id, thread_id, doc_version, label, x, y,
+          text, src_document_id, src_from, src_to)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     )
     .run(
       graphId, kind, documentId ?? null, threadId ?? null,
       docVersion ?? null, label ?? null, x ?? 0, y ?? 0,
+      text ?? null, srcDocumentId ?? null, srcFrom ?? null, srcTo ?? null,
     );
   touchGraph(graphId);
   return getGraphNode(Number(lastInsertRowid));
 }
 
-/** Position, pinned version and label are the only mutable parts of a node. */
-export function updateGraphNode(id, { x, y, docVersion, label } = {}) {
+/**
+ * Position, pinned version, label — and, on a note, its body.
+ *
+ * Nothing here can turn one kind of point into another: a note's text is the
+ * only content a node has ever owned, so it is the only content there is to
+ * edit, and it is refused on a point that merely points at something.
+ */
+export function updateGraphNode(id, { x, y, docVersion, label, text } = {}) {
   const node = getGraphNode(id);
   if (!node) return null;
 
@@ -1083,11 +1241,60 @@ export function updateGraphNode(id, { x, y, docVersion, label } = {}) {
   if (y != null) { sets.push('y = ?'); args.push(y); }
   if (docVersion !== undefined) { sets.push('doc_version = ?'); args.push(docVersion ?? null); }
   if (label !== undefined) { sets.push('label = ?'); args.push(label ?? null); }
+  if (text !== undefined) {
+    if (node.kind !== 'note') throw new Error('Only a note holds its own text.');
+    sets.push('text = ?');
+    args.push(text ?? null);
+  }
   if (!sets.length) return node;
 
   db.prepare(`UPDATE graph_nodes SET ${sets.join(', ')} WHERE id = ?`).run(...args, id);
   touchGraph(node.graph_id);
   return getGraphNode(id);
+}
+
+/**
+ * Break one note into several.
+ *
+ * The text MOVES rather than being copied: the parent keeps its label and
+ * becomes a heading over its parts, and its body goes to the children. A parent
+ * that kept its text as well would be counted twice by every turn downstream of
+ * it — the whole passage, and then each of its pieces again.
+ *
+ * Lines already drawn into the parent are left alone. They still reach the
+ * children, because context is walked upstream: whatever fed the parent now
+ * feeds each part through it.
+ */
+export function splitGraphNote(id, parts, { spot } = {}) {
+  const node = getGraphNode(id);
+  if (!node) throw new Error('No such point.');
+  if (node.kind !== 'note') throw new Error('Only a note can be split.');
+
+  const kept = (parts ?? [])
+    .map((p) => ({ label: (p?.label ?? '').trim() || null, text: String(p?.text ?? '') }))
+    .filter((p) => p.text.trim() || p.label);
+  if (kept.length < 2) throw new Error('A split needs at least two parts.');
+
+  return inTransaction(() => {
+    const made = kept.map((p, i) => {
+      const at = spot?.(i) ?? { x: node.x + 320, y: node.y + i * 200 };
+      const child = addGraphNode({
+        graphId: node.graph_id,
+        kind: 'note',
+        label: p.label,
+        text: p.text,
+        srcDocumentId: node.src_document_id,
+        x: at.x,
+        y: at.y,
+      });
+      addGraphEdge({ graphId: node.graph_id, sourceId: node.id, targetId: child.id });
+      return child;
+    });
+
+    db.prepare('UPDATE graph_nodes SET text = NULL WHERE id = ?').run(node.id);
+    touchGraph(node.graph_id);
+    return { parent: getGraphNode(node.id), parts: made };
+  });
 }
 
 /** Drops the node only. What it points at — the thread, the book — is left in
@@ -1116,7 +1323,14 @@ export function addGraphEdge({ graphId, sourceId, targetId, mode = 'full', label
   if (source.graph_id !== graphId || target.graph_id !== graphId) {
     throw new Error('Both points must be on the same graph.');
   }
-  if (target.kind !== 'thread') throw new Error('Only a conversation can read a source.');
+  // A book is never a target: nothing reads into a book. A conversation is the
+  // obvious one. A note is allowed too, and that is what makes categorising
+  // possible — "Chapter 3" → "the argument about money" is a line between two
+  // notes, carrying the parent's text down to whatever conversation eventually
+  // hangs off the child.
+  if (target.kind === 'document') {
+    throw new Error('A book cannot read a source — draw the line the other way.');
+  }
   if (ancestorIds(sourceId).includes(targetId)) {
     throw new Error('That line would close a loop.');
   }

@@ -1,3 +1,7 @@
+import {
+  attachSlashMenu, askWhatToSuggest, streamSuggestion, suggestionBox, renderSuggestions,
+} from './tools-ui.js';
+
 const $ = (id) => document.getElementById(id);
 const el = {
   docPick: $('docPick'), file: $('file'), upload: $('upload'), newThread: $('newThread'),
@@ -1654,6 +1658,16 @@ function renderMessage(m, usage) {
   // stored messages get them — a live bubble has no id until the turn settles.
   if (m.id) wrap.appendChild(messageActions(wrap, m));
 
+  // Anything already suggested about this answer, hung underneath it. Fetched
+  // per message rather than joined into the transcript: most answers have none,
+  // and the ones that do are being looked at, not scrolled past.
+  if (m.id && m.suggestion_count) {
+    const box = suggestionBox(wrap);
+    api(`/api/messages/${m.id}/suggestions`)
+      .then(({ suggestions }) => renderSuggestions(box, suggestions, { onRemove: () => {} }))
+      .catch(() => box.remove());
+  }
+
   el.transcript.appendChild(wrap);
   return wrap;
 }
@@ -1763,6 +1777,21 @@ function messageActions(wrap, m) {
     });
     if (m.saved) { save.textContent = '★ Saved'; save.classList.add('saved'); }
     acts.appendChild(save);
+
+    // Ask for something further about this answer. What comes back hangs under
+    // it rather than becoming the next turn — the conversation has not moved
+    // on, it has been annotated.
+    const sug = actBtn('✦ Suggest', 'Ask the model to suggest something about this response',
+      async () => {
+        const ask = await askWhatToSuggest(sug);
+        if (!ask) return;
+        const box = suggestionBox(wrap);
+        sug.disabled = true;
+        await streamSuggestion(box, m.id, ask);
+        sug.disabled = false;
+        scrollDown();
+      });
+    acts.appendChild(sug);
 
     const gt = actBtn(
       m.has_ground_truth ? '🔍 Ground truth' : '🔍 Check ground truth',
@@ -1986,6 +2015,11 @@ function addRetry(wrap, m) {
   acts.insertBefore(btn, acts.firstChild);
 }
 
+// `/` at the start of an empty composer opens the tool list. The catalogue
+// comes from /api/config, so a tool added on the server appears here without
+// this file knowing its name.
+attachSlashMenu(el.input, () => cfg?.slashTools ?? [], { mount: el.composer });
+
 el.input.addEventListener('input', () => {
   // `controller` guards the Enter path: Send is hidden while a turn streams,
   // but typing would otherwise re-enable it and let Enter start a second turn.
@@ -2020,6 +2054,7 @@ async function streamTurn(url, payload) {
   const body = bubble.querySelector('.body');
 
   let think = null, thinkBody = null, thinkChars = 0, thinkStart = 0, thinkDone = false;
+  let tools = null, toolCount = 0, wrote = false;
   const started = performance.now();
   let chars = 0;
   const turnUsage = { promptTokens: 0, completionTokens: 0, totalTokens: 0, ttftMs: null };
@@ -2084,6 +2119,31 @@ async function streamTurn(url, payload) {
             `Thinking… ${((performance.now() - thinkStart) / 1000).toFixed(1)}s`;
           el.stage.textContent = 'reasoning';
           scrollDown();
+        } else if (type === 'tool') {
+          // Every call the model made against the workspace, as it happens. It
+          // goes above the answer rather than into it: the answer is prose about
+          // what changed, this is the record of what actually ran.
+          if (!tools) {
+            tools = document.createElement('details');
+            tools.className = 'toolRun';
+            tools.open = true;
+            const sum = document.createElement('summary');
+            sum.textContent = 'Working on the workspace…';
+            const list = document.createElement('div');
+            list.className = 'toolList';
+            tools.append(sum, list);
+            bubble.insertBefore(tools, body);
+          }
+          toolCount += 1;
+          if (v.write) wrote = true;
+          const row = document.createElement('div');
+          row.className = `toolCall${v.ok ? '' : ' bad'}${v.write ? ' write' : ''}`;
+          row.innerHTML = `<span class="toolGlyph">${v.ok ? (v.write ? '✎' : '👁') : '⚠'}</span>`
+            + `<span class="toolName">${v.tool}</span>`
+            + `<span class="toolSay" data-i18n-skip>${escapeHtml(v.summary ?? '')}</span>`;
+          tools.querySelector('.toolList').appendChild(row);
+          el.stage.textContent = v.summary ?? v.tool;
+          scrollDown();
         } else if (type === 'stage') {
           el.stage.textContent = v;
         } else if (type === 'fallback') {
@@ -2104,6 +2164,33 @@ async function streamTurn(url, payload) {
           throw new Error(v);
         } else if (type === 'done') {
           think?.classList.remove('active');
+          if (tools) {
+            tools.open = false;
+            tools.querySelector('summary').textContent =
+              `${toolCount} workspace ${toolCount === 1 ? 'call' : 'calls'}${wrote ? ' · changed the graph' : ''}`;
+          }
+          // A tool may have filed a suggestion under an EARLIER answer — that
+          // is what /suggest does. Hang it there now, so the user does not have
+          // to reopen the thread to find what they asked for.
+          for (const s of v.suggestions ?? []) {
+            const host = el.transcript.querySelector(`.msg[data-id="${s.messageId}"]`);
+            if (!host) continue;
+            const box = suggestionBox(host);
+            const row = document.createElement('div');
+            row.className = 'suggestion';
+            row.dataset.suggestion = s.id;
+            row.innerHTML = `<div class="suggestAsk">✦ ${escapeHtml(s.ask)}</div>`
+              + `<div class="suggestBody" data-i18n-skip>${escapeHtml(s.content)}</div>`;
+            box.classList.remove('empty');
+            box.appendChild(row);
+          }
+
+          // Anything else showing this graph is now out of date. The canvas is
+          // usually the other window, so it is told rather than left to guess.
+          if (v.touched) {
+            window.dispatchEvent(new CustomEvent('workspace-changed'));
+            showSnackbar('The graph changed — reload the canvas to see it');
+          }
           bubble.querySelector('.who').textContent =
             `${v.model} · ${(v.ms / 1000).toFixed(1)}s${v.task && v.task !== 'chat' ? ' · ' + v.task : ''}`;
           if (turnUsage.totalTokens) {

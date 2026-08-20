@@ -25,6 +25,7 @@ import * as db from './db.js';
 import { threadPart, graphPart, wrapParts } from './sources.js';
 import * as llm from './llm.js';
 import { ensureIndex, searchThreads, searchMessages } from './search.js';
+import { runCalls, toolCatalogue, toolsRunBlock, parseSlash, TOOLS } from './tools.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -95,7 +96,24 @@ Prefer opening one or two promising threads over searching a fourth time. If the
 alone already identifies the thread by its title, open it immediately.
 
 A question about the conversation currently in front of the deck ("what is this about?",
-"o czym tu mówiliśmy?") is case (2) — open that record and answer from it.`;
+"o czym tu mówiliśmy?") is case (2) — open that record and answer from it.
+
+(3) The user wants the WORKSPACE READ OR CHANGED — a graph laid out, material broken into
+items and connected, a point moved. Then add calls to the same object:
+
+  {"thought": "…", "calls": [{"tool": "graph_create", "args": {"title": "…"}}], "answer": false}
+
+Calls run in order, and their results come back in <results> next round, so read before you
+write and never invent an id. You are not standing on any graph here: a write needs a graphId,
+or a graph_create earlier in the same list. Retrieval and calls can go in one object — search
+finds the conversation, calls put it on a canvas.
+
+Do NOT set "answer": true on a round whose calls have not run yet. A round that only read
+something has not done the work — look at the results first, then write on the next round.
+
+TOOLS
+
+${toolCatalogue()}`;
 
 const ANSWERER = `You are the archivist of a local document lab, talking to the user about their
 own archive of past conversations with a model.
@@ -108,7 +126,11 @@ Cite the conversations you used as [#<thread id>] right where you use them, e.g.
 "you settled on the bomb opening [#1]". Cite every thread you rely on.
 
 Be concrete: name the thread, say when it happened, quote the short span that settles the
-question. Answer in the language the user asked in, even when the archive is in another one.`;
+question. Answer in the language the user asked in, even when the archive is in another one.
+
+If a <tools-run> block is present you also changed something. Say what you did in one or two
+sentences, naming what you created or moved. Do not list the calls back to the user, and never
+claim a call that came back ERROR took effect.`;
 
 /* ------------------------------------------------------------------ helpers */
 
@@ -325,7 +347,15 @@ export function mountOracle(app) {
       }
     }
 
-    res.json({ thread: rest, messages: db.getMessages(id), document });
+    // Shipped with the transcript rather than fetched per answer: a record
+    // window is redrawn as one string, and a fetch landing mid-render would
+    // wipe whichever suggestions had arrived.
+    res.json({
+      thread: rest,
+      messages: db.getMessages(id),
+      suggestions: db.listThreadSuggestions(id),
+      document,
+    });
   });
 
   /**
@@ -336,8 +366,12 @@ export function mountOracle(app) {
    */
   app.post('/api/oracle/ask', async (req, res) => {
     const { question, history = [], model, deck, sources: pinned } = req.body || {};
-    const ask = String(question ?? '').trim();
-    if (!ask) return res.status(400).json({ error: 'Empty question.' });
+    const raw = String(question ?? '').trim();
+    if (!raw) return res.status(400).json({ error: 'Empty question.' });
+    // `/toolname …` names the tool instead of leaving the choice to the planner.
+    // The command comes off the front so the archivist answers what was meant.
+    const slash = parseSlash(raw);
+    const ask = slash ? (slash.rest || raw) : raw;
 
     const chosenModel = model || llm.config().model;
     if (!chosenModel) return res.status(400).json({ error: 'No model configured — open the LLM settings.' });
@@ -400,6 +434,12 @@ export function mountOracle(app) {
     const opened = new Map();         // threadId → transcript, deduped across rounds
     const searched = [];              // every query issued, for the UI
     let budget = TOTAL_EVIDENCE_CHARS;
+    // The Oracle stands on no graph: a write has to name one, or make one. The
+    // context object is shared across rounds so that a graph_create in round one
+    // is where round two writes without the model repeating the id.
+    const toolCtx = { threadId: null, graphId: null };
+    const toolLines = [];
+    let touched = false;
 
     const openThread = (id) => {
       if (opened.has(id) || budget <= 0) return null;
@@ -425,6 +465,10 @@ export function mountOracle(app) {
               `<archive-catalogue count="${rows.length}">\n${catalogue}\n</archive-catalogue>`,
               deckState,
               given,
+              slash ? `<chosen-tool>\nThe user typed /${slash.tool}. They have ALREADY CHOSEN `
+                + `that tool — put it in "calls" with arguments filled in from what they wrote, `
+                + `and do not substitute another.\n\n  ${slash.tool} ${TOOLS[slash.tool].args}\n`
+                + `      ${TOOLS[slash.tool].describe}\n</chosen-tool>` : '',
               findings.length ? `<findings>\n${findings.join('\n\n')}\n</findings>` : '',
               opened.size ? `<already-open>${[...opened.keys()].map((id) => `#${id}`).join(', ')}</already-open>` : '',
               priorChat.length
@@ -494,11 +538,37 @@ export function mountOracle(app) {
           }
         }
 
+        // Reading the archive and rearranging it are the same instruction as
+        // often as not — "find where we settled the ending and put it on a
+        // canvas with the chapter" — so calls run in the same round as the
+        // search that found what they act on.
+        const calls = asArray(plan.calls);
+        if (calls.length) {
+          send('stage', `running ${calls.length} tool call${calls.length > 1 ? 's' : ''}`);
+          try {
+            const ran = runCalls(calls, toolCtx, { send, signal: abort.signal });
+            toolLines.push(...ran.lines);
+            findings.push(...ran.lines);
+            touched = touched || ran.canvasTouched;
+
+            // A tool the user named after a slash has one job, and it just did
+            // it. Without this the next round is free to call it AGAIN — and
+            // for a write like graph_create that is not a wasted call, it is a
+            // second graph appearing on the shelf that nobody asked for.
+            if (slash && ran.entries.some((c) => c.ok && c.tool === slash.tool)) break;
+          } catch (err) {
+            // runCalls turns a failing tool into a result; anything that still
+            // escapes it is a bug, and the archive question is still answerable.
+            send('stage', `tools failed (${err.message}) — answering from the archive`);
+            findings.push(`tool calls failed: ${err.message}`);
+          }
+        }
+
         if (plan.answer === true) break;
-        // Nothing left to try: no new queries, nothing new opened, and the
-        // model did not say it was ready. Another identical round would only
-        // burn a call.
-        if (!queries.length && !asArray(plan.open).length) break;
+        // Nothing left to try: no new queries, nothing new opened, nothing run,
+        // and the model did not say it was ready. Another identical round would
+        // only burn a call.
+        if (!queries.length && !asArray(plan.open).length && !calls.length) break;
       }
 
       if (abort.signal.aborted) return;
@@ -508,7 +578,7 @@ export function mountOracle(app) {
       // anything. Both end with a model answering from an empty archive, which
       // is how a retrieval system invents things — so retrieve something first,
       // from its own queries if it made any and from the question if it did not.
-      if (!opened.size) {
+      if (!opened.size && !toolLines.length) {
         const lastResort = searched.length ? searched.join(' ') : ask;
         for (const hit of searchThreads(lastResort, { limit: 3 })) openThread(hit.threadId);
       }
@@ -530,7 +600,10 @@ export function mountOracle(app) {
             given,
             evidence.length
               ? `<transcripts>\n${evidence.map((t) => t.text).join('\n\n')}\n</transcripts>`
-              : '<transcripts>Nothing in the archive matched this question.</transcripts>',
+              : toolLines.length
+                ? ''
+                : '<transcripts>Nothing in the archive matched this question.</transcripts>',
+            toolLines.length ? toolsRunBlock(toolLines) : '',
             ask,
           ].filter(Boolean).join('\n\n'),
         },
@@ -555,6 +628,9 @@ export function mountOracle(app) {
         sources: evidence.map((t) => ({ threadId: t.threadId, title: t.title })),
         usage: result.usage ?? null,
         ms: Date.now() - started,
+        // A graph view open elsewhere is now stale — say so rather than letting
+        // the user wonder why their canvas has not changed.
+        touched,
       });
     } catch (err) {
       if (!abort.signal.aborted) {

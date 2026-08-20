@@ -26,7 +26,7 @@ import { fileURLToPath } from 'node:url';
 import * as db from './db.js';
 import * as llm from './llm.js';
 import {
-  documentPart, threadPart, attachedParts, wrapParts, sourceSummary,
+  documentPart, threadPart, notePart, attachedParts, wrapParts, sourceSummary,
 } from './sources.js';
 import { graphTitlePrompt, suggestTitle } from './naming.js';
 
@@ -61,10 +61,15 @@ export function assembleSource(nodeId) {
 
     const src = node.kind === 'document'
       ? documentPart({ documentId: node.document_id, version: node.doc_version })
-      : threadPart({ threadId: node.thread_id, mode, label: node.label });
+      : node.kind === 'note'
+        ? notePart({ node })
+        : threadPart({ threadId: node.thread_id, mode, label: node.label });
     if (src?.text?.trim()) {
       parts.push({ ...src, nodeId: id });
-      walked.add(node.kind === 'document' ? `document:${node.document_id}` : `thread:${node.thread_id}`);
+      // Only pointers can arrive twice — a note is unique to its canvas, so
+      // there is nothing for the de-duplication below to match it against.
+      if (node.kind === 'document') walked.add(`document:${node.document_id}`);
+      else if (node.kind === 'thread') walked.add(`thread:${node.thread_id}`);
     }
   }
 
@@ -100,7 +105,7 @@ const ROW_Y = 220;     // one card down, with air
 const CLEAR_X = 300;   // a card is 272 wide; anything nearer shares its column
 const CLEAR_Y = 190;
 
-function freeSpotNear(graphId, parent) {
+export function freeSpotNear(graphId, parent) {
   const placed = db.listGraphNodes(graphId);
   const x = parent.x + COL_X;
   let y = parent.y;
@@ -450,10 +455,15 @@ export function mountGraph(app, { streamTurn }) {
    *   { kind: 'thread',   threadId }                 a conversation you have
    *   { kind: 'thread',   from?, mode?, title? }     a NEW conversation, opened
    *                                                  from `from` (a node id)
+   *   { kind: 'note',     text, label?, from? }      a piece of text of its own
    *
    * The third form is the one the graph is for: it creates the thread, drops
    * the point, and draws the line in a single write, so branching is one click
    * rather than three.
+   *
+   * The fourth is what makes a canvas an outline as well as a history — a
+   * heading, a category, a passage lifted out of the book — and it takes `from`
+   * on the same terms, so a category hangs off the book it categorises.
    */
   app.post('/api/graphs/:id/nodes', (req, res) => {
     const graphId = Number(req.params.id);
@@ -473,7 +483,55 @@ export function mountGraph(app, { streamTurn }) {
       return res.json({ node, edge: null });
     }
 
-    if (kind !== 'thread') return res.status(400).json({ error: 'kind must be document or thread.' });
+    if (kind === 'note') {
+      const body = String(req.body?.text ?? '');
+      if (!body.trim() && !String(label ?? '').trim()) {
+        return res.status(400).json({ error: 'A note needs text or a label.' });
+      }
+
+      let parent = null;
+      if (from != null) {
+        parent = db.getGraphNode(from);
+        if (!parent || parent.graph_id !== graphId) {
+          return res.status(404).json({ error: 'No such source point.' });
+        }
+      }
+      // A note dropped by hand lands where the user clicked; one hung off a
+      // point lands beside that point, because nothing chose a position for it.
+      const at = parent && !('x' in (req.body || {})) ? freeSpotNear(graphId, parent) : { x, y };
+
+      // Provenance follows the parent when the parent is a book, so "categorise
+      // this chapter" produces notes that remember which chapter.
+      const srcDocumentId = req.body?.srcDocumentId != null
+        ? Number(req.body.srcDocumentId)
+        : parent?.kind === 'document' ? parent.document_id
+          : parent?.kind === 'note' ? parent.src_document_id
+            : null;
+
+      const node = db.addGraphNode({
+        graphId, kind: 'note', label: label ?? null, text: body,
+        srcDocumentId,
+        srcFrom: req.body?.srcFrom != null ? Number(req.body.srcFrom) : null,
+        srcTo: req.body?.srcTo != null ? Number(req.body.srcTo) : null,
+        x: at.x, y: at.y,
+      });
+
+      let edge = null;
+      if (parent) {
+        try {
+          edge = db.addGraphEdge({
+            graphId, sourceId: parent.id, targetId: node.id, mode: req.body?.mode || 'full',
+          });
+        } catch (err) {
+          return res.status(200).json({ node, edge: null, warning: err.message });
+        }
+      }
+      return res.json({ node, edge });
+    }
+
+    if (kind !== 'thread') {
+      return res.status(400).json({ error: 'kind must be document, thread or note.' });
+    }
 
     // An existing conversation being placed on the canvas.
     let thread = threadId != null ? db.getThread(Number(threadId)) : null;
@@ -491,7 +549,9 @@ export function mountGraph(app, { streamTurn }) {
         }
         inheritedDoc = parent.kind === 'document'
           ? parent.document_id
-          : db.getThread(parent.thread_id)?.document_id ?? null;
+          : parent.kind === 'note'
+            ? parent.src_document_id
+            : db.getThread(parent.thread_id)?.document_id ?? null;
       }
       thread = db.createThread({
         title: (req.body?.title ?? '').trim() || 'New branch',
@@ -529,7 +589,12 @@ export function mountGraph(app, { streamTurn }) {
     const docVersion = 'docVersion' in (req.body || {})
       ? (req.body.docVersion == null ? null : Number(req.body.docVersion))
       : undefined;
-    res.json(db.updateGraphNode(node.id, { x, y, docVersion, label }));
+    const text = 'text' in (req.body || {}) ? req.body.text : undefined;
+    try {
+      res.json(db.updateGraphNode(node.id, { x, y, docVersion, label, text }));
+    } catch (err) {
+      res.status(400).json({ error: err.message });
+    }
   });
 
   /**
@@ -545,6 +610,33 @@ export function mountGraph(app, { streamTurn }) {
     db.deleteGraphNode(node.id);
     if (withThread && node.kind === 'thread' && node.thread_id) db.deleteThread(node.thread_id);
     res.json({ ok: true, threadDeleted: withThread && node.kind === 'thread' });
+  });
+
+  /**
+   * Break a note into its parts.
+   *
+   * body: { parts: [{ label?, text }] }
+   *
+   * The parent keeps its label and loses its body — it becomes the heading over
+   * what it used to say. See `db.splitGraphNote` for why the text moves instead
+   * of being copied.
+   */
+  app.post('/api/graphs/:gid/nodes/:id/split', (req, res) => {
+    const graphId = Number(req.params.gid);
+    const node = db.getGraphNode(Number(req.params.id));
+    if (!node || node.graph_id !== graphId) {
+      return res.status(404).json({ error: 'No such point.' });
+    }
+    try {
+      // Laid out down one column beside the parent, each part cleared against
+      // whatever is already standing there — the same placement a branch gets.
+      const out = db.splitGraphNote(node.id, req.body?.parts, {
+        spot: () => freeSpotNear(graphId, node),
+      });
+      res.json(out);
+    } catch (err) {
+      res.status(400).json({ error: err.message });
+    }
   });
 
   /* --------------------------------------------------------------- lines */
@@ -626,6 +718,10 @@ export function mountGraph(app, { streamTurn }) {
       node,
       thread: rest,
       messages: db.getMessages(node.thread_id),
+      // Handed over with the transcript rather than fetched per answer: the
+      // canvas draws its log as one string, and a render arriving mid-fetch
+      // would wipe whichever ones had landed.
+      suggestions: db.listThreadSuggestions(node.thread_id),
       document,
       parents: db.parentEdges(node.id),
       usage: db.threadUsage(node.thread_id),
@@ -674,6 +770,10 @@ export function mountGraph(app, { streamTurn }) {
     await streamTurn(res, {
       threadId, userMsg, history, taskId, chosenModel,
       source: source.parts.length ? { text: source.text, filename: source.filename } : null,
+      // Which canvas the question was asked from. The tool layer defaults its
+      // writes here, so "add a note for that" lands where the user is looking
+      // instead of asking them which graph they meant.
+      graphId: node.graph_id,
     });
   }));
 
@@ -724,6 +824,7 @@ export function mountGraph(app, { streamTurn }) {
       taskId: userMsg.task || 'chat',
       chosenModel,
       source: source.parts.length ? { text: source.text, filename: source.filename } : null,
+      graphId: node.graph_id,
     });
   }));
 
@@ -739,9 +840,14 @@ export function mountGraph(app, { streamTurn }) {
       return res.status(404).json({ error: 'No such point.' });
     }
 
+    // Which book the branch inherits — not for context (the upstream walk
+    // supplies that) but so the version rail and "file this answer as a
+    // version" keep working on it. A note passes on the book it was lifted from.
     const inheritedDoc = parent.kind === 'document'
       ? parent.document_id
-      : db.getThread(parent.thread_id)?.document_id ?? null;
+      : parent.kind === 'note'
+        ? parent.src_document_id
+        : db.getThread(parent.thread_id)?.document_id ?? null;
 
     const thread = db.createThread({
       title: (req.body?.title ?? '').trim() || 'New branch',

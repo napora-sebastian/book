@@ -31,6 +31,10 @@
    to the deck behind the modal.
    =========================================================================== */
 
+import {
+  attachSlashMenu, askWhatToSuggest, streamSuggestion, suggestionBox,
+} from '../tools-ui.js';
+
 /* The whole view, built once, off-document. Held together by `data-el` rather
    than ids: mounted over a page that has its own #modal and #snacks, ids would
    be a collision waiting for the first `getElementById`. */
@@ -55,6 +59,7 @@ const MARKUP = `
       <button data-el="importBtn" class="hudBtn" title="Draw the conversations you already have as graphs">⇱ IMPORT</button>
       <button data-el="addDoc" class="hudBtn" title="Put a book on the canvas as a source">◆ BOOK</button>
       <button data-el="addThread" class="hudBtn" title="Put a conversation you already have on the canvas">◈ THREAD</button>
+      <button data-el="addNote" class="hudBtn" title="Write a note — a category, a heading, a passage worth arguing with on its own">▪ NOTE</button>
       <button data-el="tidy" class="hudBtn" title="Lay the graph out left to right (L)">⇥ TIDY</button>
       <button data-el="fit" class="hudBtn" title="Frame everything (F)">⛶ FIT</button>
       <button data-el="linkBtn" class="hudBtn" title="Providers, keys, models and the fallback chain">⚙ LINK</button>
@@ -423,10 +428,12 @@ function renderWires() {
 
 /* ------------------------------------------------------------------- cards */
 
-const glyphOf = (n) => (n.kind === 'document' ? '◆' : '◈');
+const glyphOf = (n) => (n.kind === 'document' ? '◆' : n.kind === 'note' ? '▪' : '◈');
 const titleOf = (n) => n.label
-  || (n.kind === 'document' ? n.doc_filename : n.thread_title)
-  || (n.kind === 'document' ? 'missing book' : 'untitled');
+  || (n.kind === 'document' ? n.doc_filename : n.kind === 'note' ? null : n.thread_title)
+  || (n.kind === 'document' ? 'missing book' : n.kind === 'note' ? 'untitled note' : 'untitled');
+/* Three kinds now, and the class name is what the stylesheet keys off. */
+const classOf = (n) => (n.kind === 'document' ? 'doc' : n.kind === 'note' ? 'note' : 'thread');
 
 /**
  * The drafts a book actually has, newest first. Versions can be deleted from
@@ -490,9 +497,35 @@ function threadNodeBody(n) {
     </div>`;
 }
 
+/**
+ * A note's card: its own text, and where it came from if it came from a book.
+ *
+ * A note that has been split kept its label and gave its body to its parts, so
+ * it draws as a heading rather than as an empty card — otherwise the one point
+ * on the canvas that is doing organisational work looks like a mistake.
+ */
+function noteNodeBody(n) {
+  const text = String(n.text ?? '').trim();
+  const children = edges.filter((e) => e.source_id === n.id).length;
+
+  return `
+    <div class="nodeBody">
+      <div class="nodeMeta">
+        ${text ? `<span><b>${fmtNum(text.length)}</b> CHARS</span>` : '<span>HEADING</span>'}
+        ${children ? `<span><b>${children}</b> PART${children === 1 ? '' : 'S'}</span>` : ''}
+        ${n.src_filename ? `<span class="noteFrom" title="Lifted out of ${esc(n.src_filename)}">${
+          esc(clip(n.src_filename, 22))}</span>` : ''}
+      </div>
+      <div class="nodePreview">${
+        text ? esc(clip(text, 220)) : '<em>a heading over the points below it</em>'
+      }</div>
+    </div>`;
+}
+
 function cardHtml(n) {
   const isDoc = n.kind === 'document';
-  const tag = isDoc ? `V${pinnedVersion(n)}` : 'CHAT';
+  const isNote = n.kind === 'note';
+  const tag = isDoc ? `V${pinnedVersion(n)}` : isNote ? 'NOTE' : 'CHAT';
   const sources = parentsOf(n.id).length;
   // Nothing here is a copy, so a subject standing on other canvases is standing
   // on them right now — an answer sent here is an answer they all read next.
@@ -508,14 +541,17 @@ function cardHtml(n) {
       <span class="nodeTag">${tag}</span>
     </header>
 
-    ${isDoc ? docNodeBody(n) : threadNodeBody(n)}
+    ${isDoc ? docNodeBody(n) : isNote ? noteNodeBody(n) : threadNodeBody(n)}
 
     <footer class="nodeActs">
       ${isDoc
         ? '<button class="nodeAct" data-act="branch">⑂ ASK THIS BOOK</button>'
-        : '<button class="nodeAct" data-act="open">▸ OPEN</button>'
-          + '<button class="nodeAct" data-act="branch">⑂ BRANCH</button>'
-          + '<button class="nodeAct" data-act="rename" title="Rename this conversation">✎</button>'}
+        : isNote
+          ? '<button class="nodeAct" data-act="branch">⑂ BRANCH</button>'
+            + '<button class="nodeAct" data-act="editNote" title="Edit this note">✎</button>'
+          : '<button class="nodeAct" data-act="open">▸ OPEN</button>'
+            + '<button class="nodeAct" data-act="branch">⑂ BRANCH</button>'
+            + '<button class="nodeAct" data-act="rename" title="Rename this conversation">✎</button>'}
       <span class="spacer"></span>
       ${elsewhere ? `<button class="nodeAct shared" data-act="usage"
           title="Also on ${elsewhere} other graph${elsewhere === 1 ? '' : 's'} — the same ${isDoc ? 'book' : 'conversation'}, not a copy">⁂${elsewhere}</button>` : ''}
@@ -539,7 +575,7 @@ function renderNodes() {
       el.points.append(node);
       nodeEls.set(n.id, node);
     }
-    node.className = `node ${n.kind === 'document' ? 'doc' : 'thread'}`
+    node.className = `node ${classOf(n)}`
       + (selected === n.id ? ' sel' : '')
       + (sessions.has(n.id) ? ' live' : '');
     node.style.transform = `translate(${n.x}px, ${n.y}px)`;
@@ -583,7 +619,7 @@ function paintCardNow(id) {
   const n = byNode.get(id);
   const node = nodeEls.get(id);
   if (!n || !node) return;
-  node.className = `node ${n.kind === 'document' ? 'doc' : 'thread'}`
+  node.className = `node ${classOf(n)}`
     + (selected === id ? ' sel' : '') + (sessions.has(id) ? ' live' : '');
   node.innerHTML = cardHtml(n);
   sizes.set(id, node.offsetHeight);
@@ -598,10 +634,12 @@ function render() {
 
 function renderReadout() {
   const docs = nodes.filter((n) => n.kind === 'document').length;
-  const chats = nodes.length - docs;
+  const notes = nodes.filter((n) => n.kind === 'note').length;
+  const chats = nodes.length - docs - notes;
   const live = sessions.size;
   el.readout.innerHTML = [
-    `<span><b>${nodes.length}</b> POINTS · <b>${docs}</b> SOURCE · <b>${chats}</b> CHAT</span>`,
+    `<span><b>${nodes.length}</b> POINTS · <b>${docs}</b> SOURCE${
+      notes ? ` · <b>${notes}</b> NOTE` : ''} · <b>${chats}</b> CHAT</span>`,
     `<span><b>${edges.length}</b> LINES · ZOOM <b>${Math.round(cam.z * 100)}%</b></span>`,
     live ? `<span class="live">◈ ${live} ANSWERING</span>` : '<span>◈ IDLE</span>',
   ].join('');
@@ -806,9 +844,10 @@ function startLink(ev, id, card) {
   card.setPointerCapture(ev.pointerId);
   el.ghostWire.classList.remove('hidden');
 
-  // Only a conversation can take a line; a book reads nothing.
+  // A book reads nothing, so it can never take a line. A conversation and a
+  // note both can — a line into a note is how one category sits under another.
   for (const [nid, node] of nodeEls) {
-    if (nid !== id && byNode.get(nid)?.kind === 'thread') node.classList.add('droppable');
+    if (nid !== id && byNode.get(nid)?.kind !== 'document') node.classList.add('droppable');
   }
   ev.preventDefault();
   ev.stopPropagation();
@@ -836,7 +875,7 @@ async function finishLink(ev) {
 
   try {
     if (target != null && target !== from) {
-      if (byNode.get(target)?.kind !== 'thread') {
+      if (byNode.get(target)?.kind === 'document') {
         return toast('A book reads nothing — pull the line the other way', 'err');
       }
       await post(`/api/graphs/${graphId}/edges`, { sourceId: from, targetId: target, mode: 'full' });
@@ -893,9 +932,14 @@ el.points.addEventListener('click', async (ev) => {
 
   if (act === 'usage') {
     const n = byNode.get(id);
-    if (n) return void openUsage(n.kind, n.kind === 'document' ? n.document_id : n.thread_id, titleOf(n));
+    if (n && n.kind !== 'note') {
+      return void openUsage(n.kind, n.kind === 'document' ? n.document_id : n.thread_id, titleOf(n));
+    }
     return;
   }
+
+  if (act === 'editNote') return void editNote(id);
+  if (act === 'splitNote') return void splitNote(id);
 
   if (act === 'remove') return void removePoint(id);
 });
@@ -926,8 +970,14 @@ el.wires.addEventListener('click', (ev) => {
   const modes = [
     ['full', 'THE WHOLE SOURCE', source?.kind === 'document'
       ? 'The entire book, at the version this point is pinned to.'
-      : 'The whole conversation, most recent turns first if it is long.'],
-    ['last', 'THE FINAL ANSWER ONLY', 'Just the last thing the source said. The cheap branch: use it when the parent produced a draft and the argument that led there is noise.'],
+      : source?.kind === 'note'
+        ? 'The note as written.'
+        : 'The whole conversation, most recent turns first if it is long.'],
+    ['last', 'THE FINAL ANSWER ONLY', source?.kind === 'note'
+      // A note has no turns to take the last of. Saying so is better than
+      // offering a mode that quietly behaves as the one above it.
+      ? 'A note has no turns, so this reads the same as the whole note.'
+      : 'Just the last thing the source said. The cheap branch: use it when the parent produced a draft and the argument that led there is noise.'],
     ['none', 'NOTHING', 'The line stays drawn — it records where this came from — but carries no text into the prompt.'],
   ];
 
@@ -973,7 +1023,11 @@ async function removePoint(id) {
     what: isThread
       ? `“${titleOf(n)}” leaves the graph. The conversation itself stays in the archive — the deck will still list it — and the lines into and out of this point are cut.${
         turns ? '' : ' It has no turns in it, so there is nothing to keep.'}`
-      : `“${titleOf(n)}” leaves the graph. The book stays in the library, and every conversation branched off it keeps its own history.`,
+      : n.kind === 'note'
+        // The one point that is not a pointer. There is no library copy to fall
+        // back on, so the warning has to say so plainly.
+        ? `“${titleOf(n)}” is deleted. A note lives only on this canvas — nothing else holds a copy of it — and the lines into and out of it are cut.`
+        : `“${titleOf(n)}” leaves the graph. The book stays in the library, and every conversation branched off it keeps its own history.`,
     ok: 'REMOVE',
     danger: true,
     extra: isThread && turns === 0
@@ -1019,10 +1073,33 @@ async function openPoint(id) {
   // Standing on other canvases is a property of the point worth carrying in the
   // header: everything below this line writes to something they are all reading.
   const elsewhere = n.other_graphs ?? 0;
-  el.inspUsage.classList.toggle('hidden', !elsewhere);
+  el.inspUsage.classList.toggle('hidden', !elsewhere || n.kind === 'note');
   el.inspUsage.textContent = `⁂ ${elsewhere}`;
   el.inspUsage.title = `Also on ${elsewhere} other graph${elsewhere === 1 ? '' : 's'} — the same ${
     n.kind === 'document' ? 'book' : 'conversation'}, not a copy. Click to see where.`;
+
+  if (n.kind === 'note') {
+    // Like a book, a note is something to be read rather than asked — the
+    // difference is that this one you can also rewrite, right here.
+    inspected = null;
+    el.inspRead.classList.add('hidden');
+    const text = String(n.text ?? '').trim();
+    const parts = edges.filter((e) => e.source_id === n.id).length;
+    el.inspSub.textContent = text
+      ? `NOTE · ${fmtNum(text.length)} CHARS${n.src_filename ? ` · FROM ${String(n.src_filename).toUpperCase()}` : ''}`
+      : `HEADING · ${parts} PART${parts === 1 ? '' : 'S'}`;
+    el.composer.classList.add('hidden');
+    el.sources.innerHTML = `<div class="sourcesTop"><b>SOURCE POINT</b></div>
+      <p class="srcNone">This is a source, not a conversation. Pull a line out of it — or press BRANCH — to open one that reads it.</p>`;
+    el.inspLog.innerHTML = `<div class="noteRead" data-i18n-skip>${
+      text ? esc(text) : '<em>This note has no body. Its parts are the points below it.</em>'}</div>
+      <div class="docActs">
+        <button class="hudBtn" data-act="editNote">✎ EDIT</button>
+        <button class="hudBtn" data-act="splitNote"
+                title="Break this note into parts — each becomes its own point below it">⑃ SPLIT</button>
+      </div>`;
+    return;
+  }
 
   if (n.kind === 'document') {
     // A book cannot be asked anything directly — the question belongs to a
@@ -1138,7 +1215,7 @@ async function refreshSources() {
     const direct = Boolean(edge);
     return `
       <div class="srcRow ${p.kind}">
-        <span class="srcGlyph">${p.kind === 'document' ? '◆' : '◈'}</span>
+        <span class="srcGlyph">${p.kind === 'document' ? '◆' : p.kind === 'note' ? '▪' : '◈'}</span>
         <span class="srcName" title="${esc(p.name)}${p.detail ? ` — ${esc(p.detail)}` : ''}">
           ${direct ? '' : '↳ '}${esc(p.name)}${p.version != null ? ` v${p.version}` : ''}
         </span>
@@ -1494,7 +1571,9 @@ el.inspClose.addEventListener('click', closeInspector);
 
 el.inspUsage.addEventListener('click', () => {
   const n = selected != null ? byNode.get(selected) : null;
-  if (!n) return;
+  // A note is not a pointer, so it stands on exactly one canvas and there is
+  // nowhere else to go and look.
+  if (!n || n.kind === 'note') return;
   openUsage(n.kind, n.kind === 'document' ? n.document_id : n.thread_id, titleOf(n));
 });
 
@@ -1530,6 +1609,8 @@ function turnHtml(m, isLast, { cut = null, before = false } = {}) {
   const acts = [];
   if (!you) {
     acts.push(`<button class="turnAct" data-msg="${m.id}" data-act="copy">COPY</button>`);
+    acts.push(`<button class="turnAct" data-msg="${m.id}" data-act="suggest"
+        title="Ask the model to suggest something about this answer">✦ SUGGEST</button>`);
     acts.push(`<button class="turnAct" data-msg="${m.id}" data-act="branch">⑂ BRANCH FROM THIS</button>`);
     if (inspected?.document && m.content?.trim()) {
       acts.push(`<button class="turnAct" data-msg="${m.id}" data-act="version">⇪ FILE AS VERSION</button>`);
@@ -1557,7 +1638,22 @@ function turnHtml(m, isLast, { cut = null, before = false } = {}) {
       ${m.content?.trim() ? `<div class="bubble">${esc(m.content)}</div>` : ''}
       ${m.error ? `<p class="turnErr">✕ ${esc(m.error)}</p>` : ''}
       ${acts.length ? `<div class="turnActs">${acts.join('')}</div>` : ''}
+      ${suggestionsHtml(m.id)}
     </div>`;
+}
+
+/** What has been suggested about one answer, hung under it. */
+function suggestionsHtml(messageId) {
+  const rows = (inspected?.suggestions ?? []).filter((s) => s.message_id === messageId);
+  if (!rows.length) return '';
+  return `<div class="suggestions">${rows.map((s) => `
+    <div class="suggestion" data-suggestion="${s.id}">
+      <div class="suggestAsk">✦ ${esc(s.ask)}
+        <button class="suggestDrop" data-act="dropSuggestion" data-suggestion="${s.id}"
+                title="Remove this suggestion">✕</button>
+      </div>
+      <div class="suggestBody" data-i18n-skip>${esc(s.content)}</div>
+    </div>`).join('')}</div>`;
 }
 
 function renderLog() {
@@ -1627,8 +1723,29 @@ el.inspLog.addEventListener('click', async (ev) => {
         }));
   }
 
+  if (act === 'dropSuggestion') {
+    const id = Number(btn.dataset.suggestion);
+    await fetch(`/api/suggestions/${id}`, { method: 'DELETE' }).catch(() => {});
+    if (selected != null) { await loadThread(selected); renderLog(); }
+    return;
+  }
+
   const m = inspected?.messages.find((x) => x.id === msgId);
   if (!m) return;
+
+  if (act === 'suggest') {
+    const ask = await askWhatToSuggest(btn);
+    if (!ask) return;
+    // The log is rebuilt as one string, so the stream goes into a block made
+    // here and the authoritative version arrives with the reload afterwards.
+    const turn = btn.closest('.turn');
+    const box = suggestionBox(turn);
+    btn.disabled = true;
+    await streamSuggestion(box, m.id, ask);
+    btn.disabled = false;
+    if (selected != null) { await loadThread(selected); renderLog(); }
+    return;
+  }
 
   if (act === 'copy') {
     await navigator.clipboard.writeText(m.content ?? '');
@@ -1757,11 +1874,20 @@ async function runTurn(nodeId, url, body) {
           say(`reasoning · ${s.reasoning.length.toLocaleString()} chars`, true);
         }
         else if (type === 'stage') say(payload, true);
+        else if (type === 'tool') {
+          // The model is acting on this canvas while the user is looking at it.
+          // Reading is a status line; writing is a toast, because a point is
+          // about to appear somewhere they were not looking.
+          say(payload.summary ?? payload.tool, true);
+          if (payload.write) { s.wrote = true; toast(payload.summary, payload.ok ? 'ok' : 'err'); }
+          else if (!payload.ok) toast(payload.summary, 'err');
+        }
         else if (type === 'usage') { if (payload.totalTokens) say(`${payload.totalTokens.toLocaleString()} tok`, true); }
         else if (type === 'fallback') toast(`${payload.failed} is down — ${payload.next} is answering`, 'info');
         else if (type === 'done') {
           say(`answered · ${fmtTok(payload.usage?.total_tokens ?? 0)} in this point`);
           for (const note of payload.fallbacks ?? []) toast(note, 'info');
+          if (payload.touched) s.wrote = true;
         }
         else if (type === 'error') throw new Error(payload);
       }
@@ -1780,6 +1906,9 @@ async function runTurn(nodeId, url, body) {
     // The turn changed the card's turn count, its preview, and — on the first
     // message — the conversation's own name, so the canvas is re-read.
     await reload();
+    // A tool may also have made a graph that is not this one. `reload` only
+    // re-reads the canvas in front of you, so the shelf is re-read as well.
+    if (s.wrote) await loadGraphs({ select: graphId });
     if (selected === nodeId) { await loadThread(nodeId); refreshSources(); }
     renderReadout();
     // A turn renames a fresh conversation and adds two messages to it — the
@@ -1804,6 +1933,10 @@ el.composer.addEventListener('submit', async (ev) => {
 });
 
 el.cHalt.addEventListener('click', () => { if (selected != null) sessions.get(selected)?.ac.abort(); });
+
+// `/` at the start of the composer opens the tool list, the same list and the
+// same behaviour as the deck and the Oracle.
+attachSlashMenu(el.cInput, () => cfg?.slashTools ?? [], { mount: el.composer });
 
 el.cInput.addEventListener('input', () => {
   el.cInput.style.height = 'auto';
@@ -2098,7 +2231,7 @@ async function openAtlas() {
     });
   }
 
-  const glyph = (kind) => (kind === 'document' ? '◆' : '◈');
+  const glyph = (kind) => (kind === 'document' ? '◆' : kind === 'note' ? '▪' : '◈');
 
   // Shared first, and deliberately so: it is the only section that tells you
   // something you could not have seen from inside a graph.
@@ -2298,6 +2431,124 @@ async function renameSubject(kind, id, current) {
   return title;
 }
 
+/* --------------------------------------------------------------- the notes
+
+   The one point that holds its own content. Everything else on this canvas is
+   a pointer at something the archive already had; a note is what you write
+   when the archive does not have it yet — a category, a heading, a passage
+   pulled out of a book because it is about to be argued with separately.
+   =========================================================================== */
+
+/** Put a note down: by hand from the toolbar, or hanging off a point. */
+async function addNote({ from = null } = {}) {
+  const answer = await openModal({
+    title: from ? 'A NOTE UNDER THIS POINT' : 'PUT DOWN A NOTE',
+    what: from
+      ? 'It hangs off the point you were on, and every conversation branched below reads it.'
+      : 'A category, a heading, or a passage worth arguing with on its own.',
+    label: 'Text',
+    value: '',
+    ok: 'PUT IT DOWN',
+    multiline: true,
+  });
+  const text = answer?.value.trim();
+  if (!text) return;
+
+  // The label is what fits on a card; the first line is what the writer already
+  // decided was the summary, so it is the honest default rather than a prompt
+  // for a second thing to type.
+  const first = text.split('\n')[0].replace(/^#+\s*/, '').trim();
+
+  try {
+    const made = await post(`/api/graphs/${graphId}/nodes`, {
+      kind: 'note', text, label: clip(first, 60), from,
+      ...(from ? {} : { x: Math.round(-cam.x / cam.z + 80), y: Math.round(-cam.y / cam.z + 80) }),
+    });
+    await reload();
+    openPoint(made.node.id);
+    toast('Note put down');
+  } catch (err) { toast(err.message, 'err'); }
+}
+
+/** Rewrite a note's body in place. */
+async function editNote(id) {
+  const n = byNode.get(id);
+  if (!n || n.kind !== 'note') return;
+
+  const answer = await openModal({
+    title: 'EDIT THIS NOTE',
+    what: 'Every conversation downstream of it reads the new text on its next turn.',
+    label: 'Text',
+    value: String(n.text ?? ''),
+    ok: 'SAVE',
+    multiline: true,
+  });
+  if (answer == null) return;
+
+  const text = answer.value;
+  const first = text.split('\n')[0].replace(/^#+\s*/, '').trim();
+  try {
+    await patch(`/api/graphs/${graphId}/nodes/${id}`, {
+      text,
+      // A note that was never named keeps taking its name from its opening
+      // line; one the user named by hand keeps the name they gave it.
+      ...(n.label && n.label !== clip(String(n.text ?? '').split('\n')[0].replace(/^#+\s*/, '').trim(), 60)
+        ? {} : { label: clip(first, 60) || null }),
+    });
+    await reload();
+    if (selected === id) openPoint(id);
+    if (selected != null) refreshSources();
+    toast('Note saved');
+  } catch (err) { toast(err.message, 'err'); }
+}
+
+/**
+ * Break a note into parts, each of which becomes its own point under it.
+ *
+ * The dialog is the note's own text with separators typed into it, rather than
+ * a builder with an "add part" button: splitting is a reading decision made
+ * while looking at the prose, and it is faster to put two dashes in the right
+ * places than to cut and paste between fields.
+ */
+async function splitNote(id) {
+  const n = byNode.get(id);
+  if (!n || n.kind !== 'note') return;
+  const body = String(n.text ?? '');
+  if (!body.trim()) return void toast('This note is already a heading — its parts are below it', 'info');
+
+  const answer = await openModal({
+    title: 'SPLIT THIS NOTE',
+    what: 'Separate the parts with a line of three dashes (---). A part whose first line starts '
+      + 'with # is named by it. This note keeps its name and becomes the heading over them.',
+    label: 'Parts',
+    value: body,
+    ok: 'SPLIT',
+    multiline: true,
+  });
+  if (answer == null) return;
+
+  const parts = answer.value
+    .split(/^\s*-{3,}\s*$/m)
+    .map((chunk) => {
+      const lines = chunk.trim().split('\n');
+      const named = /^#+\s+/.test(lines[0] ?? '');
+      return {
+        label: clip((named ? lines[0].replace(/^#+\s*/, '') : lines[0] ?? '').trim(), 60) || null,
+        text: (named ? lines.slice(1).join('\n') : chunk).trim(),
+      };
+    })
+    .filter((p) => p.text || p.label);
+
+  if (parts.length < 2) return void toast('Put a --- line between the parts first', 'err');
+
+  try {
+    const out = await post(`/api/graphs/${graphId}/nodes/${id}/split`, { parts });
+    await reload();
+    openPoint(id);
+    toast(`Split into ${out.parts.length} points`);
+  } catch (err) { toast(err.message, 'err'); }
+}
+
 /** The ✎ on a point: renames the conversation the point stands on. */
 async function renamePoint(id) {
   const n = byNode.get(id);
@@ -2430,6 +2681,7 @@ el.addDoc.addEventListener('click', pickDocument);
 el.seedDoc.addEventListener('click', pickDocument);
 el.addThread.addEventListener('click', pickThread);
 el.seedThread.addEventListener('click', pickThread);
+el.addNote.addEventListener('click', () => addNote());
 el.tidy.addEventListener('click', tidy);
 el.fit.addEventListener('click', fitAll);
 
@@ -2519,7 +2771,7 @@ el.sheetBody.addEventListener('click', (ev) => sheetPick?.(ev.target));
  * an object — `{ value }` for a prompt, `{ withThread }` when a checkbox was
  * offered — so a caller never has to guess which shape it asked for.
  */
-function openModal({ title, what = '', label = null, value = '', confirmWord = null, ok = 'CONFIRM', danger = false, extra = null, suggest = null }) {
+function openModal({ title, what = '', label = null, value = '', confirmWord = null, ok = 'CONFIRM', danger = false, extra = null, suggest = null, multiline = false }) {
   return new Promise((resolve) => {
     el.modalTitle.textContent = title;
     el.modalWhat.textContent = what;
@@ -2529,8 +2781,20 @@ function openModal({ title, what = '', label = null, value = '', confirmWord = n
     const wants = Boolean(label || confirmWord);
     el.modalLabel.textContent = label ?? '';
     el.modalLabel.classList.toggle('hidden', !wants);
-    el.modalInput.classList.toggle('hidden', !wants);
+    el.modalInput.classList.toggle('hidden', !wants || multiline);
     el.modalInput.value = confirmWord ? '' : value;
+
+    // A note's body is paragraphs, not a name. Built here rather than living in
+    // the markup for the same reason the checkbox below is: two callers want it,
+    // and a permanent control would need hiding everywhere else.
+    let area = null;
+    if (multiline) {
+      area = document.createElement('textarea');
+      area.className = 'modalInput modalArea';
+      area.rows = 12;
+      area.value = value;
+      el.modalInput.after(area);
+    }
 
     // The checkbox is built here rather than living in the markup: only two
     // callers offer one, and an always-present control would need hiding twice.
@@ -2554,12 +2818,14 @@ function openModal({ title, what = '', label = null, value = '', confirmWord = n
     el.modalSuggest.disabled = false;
     el.modalSuggest.textContent = '✦ SUGGEST';
     el.modal.classList.remove('hidden');
-    (wants ? el.modalInput : el.modalOk).focus();
-    if (wants && !confirmWord) el.modalInput.select();
+    (area ?? (wants ? el.modalInput : el.modalOk)).focus();
+    if (area) area.setSelectionRange(area.value.length, area.value.length);
+    else if (wants && !confirmWord) el.modalInput.select();
 
     const done = (result) => {
       el.modal.classList.add('hidden');
       box?.remove();
+      area?.remove();
       el.modalOk.removeEventListener('click', accept);
       el.modalCancel.removeEventListener('click', cancel);
       el.modalInput.removeEventListener('keydown', onKey);
@@ -2590,17 +2856,22 @@ function openModal({ title, what = '', label = null, value = '', confirmWord = n
         return;
       }
       done({
-        value: el.modalInput.value,
+        value: area ? area.value : el.modalInput.value,
         [extra?.id ?? 'extra']: box?.querySelector('input').checked ?? false,
       });
     };
     const cancel = () => done(null);
     const onKey = (ev) => { if (ev.key === 'Enter') { ev.preventDefault(); accept(); } };
+    // In a textarea Enter is a newline; ⌘/Ctrl-Enter is the one that confirms.
+    const onAreaKey = (ev) => {
+      if (ev.key === 'Enter' && (ev.metaKey || ev.ctrlKey)) { ev.preventDefault(); accept(); }
+    };
     const onEsc = (ev) => { if (ev.key === 'Escape') { ev.preventDefault(); cancel(); } };
 
     el.modalOk.addEventListener('click', accept);
     el.modalCancel.addEventListener('click', cancel);
     el.modalInput.addEventListener('keydown', onKey);
+    area?.addEventListener('keydown', onAreaKey);
     el.modalSuggest.addEventListener('click', propose);
     document.addEventListener('keydown', onEsc);
   });

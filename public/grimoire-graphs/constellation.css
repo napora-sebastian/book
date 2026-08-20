@@ -23,6 +23,10 @@
   --cyanGlow:  rgba(111, 230, 255, .30);
   --amber:     #ffb454;
   --amberGlow: rgba(255, 180, 84, .28);
+  /* The third kind of point: what the reader wrote, as against the book they
+     read and the conversation they had about it. */
+  --noteEdge:  #7fd6a8;
+  --noteGlow:  rgba(127, 214, 168, .26);
   --alert:     #ff6b5a;
   --go:        #6ee7a8;
 
@@ -904,3 +908,116 @@
 @media (hover: none) {
   .constel .port.out { transform: scale(1.25); }
 }
+
+/* ============================================================== the notes
+
+   The third kind of point. A book is warm and heavy because the work stands
+   on it; a conversation is cyan because it is live. A note is neither — it is
+   something the reader wrote down about the other two — so it reads quiet and
+   green, and its body is prose rather than a metric.
+   ========================================================================= */
+
+.constel .node.note { border-left: 2px solid var(--noteEdge, #7fd6a8); }
+.constel .node.note .nodeGlyph { color: var(--noteEdge, #7fd6a8); }
+.constel .node.note .nodeTag {
+  color: var(--noteEdge, #7fd6a8);
+  border-color: rgba(127, 214, 168, .35);
+}
+.constel .node.note .port.out { border-color: rgba(127, 214, 168, .6); }
+.constel .node.note .nodeMeta b { color: var(--noteEdge, #7fd6a8); }
+
+/* Where a passage was lifted from, on the card. Long filenames are already
+   clipped in the markup; this keeps the chip from breaking the meta row. */
+.constel .noteFrom {
+  color: var(--dim); opacity: .8;
+  max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+
+/* A note's body in the inspector: the writer's own line breaks, kept. */
+.constel .noteRead {
+  font-size: 13px; line-height: 1.7; color: var(--fgSoft);
+  white-space: pre-wrap; word-break: break-word;
+  padding: var(--s3) 0;
+}
+.constel .noteRead em { color: var(--dim); }
+
+/* The multiline field the note dialogs put in front of the single-line one. */
+.constel .modalArea {
+  width: 100%; resize: vertical; min-height: 160px;
+  line-height: 1.65; white-space: pre-wrap;
+}
+
+/* ================================================= slash menu · suggestions
+
+   Shared behaviour (../tools-ui.js), dressed for this view: mono, boxed, cyan.
+   The module writes these class names and reads nothing back.
+   ========================================================================= */
+
+.constel .composer { position: relative; }
+.constel .slashMenu {
+  position: absolute; bottom: calc(100% + 6px); left: 0; right: 0; z-index: 40;
+  max-height: 240px; overflow: auto;
+  background: var(--voidLift); border: 1px solid var(--cyanDim);
+  box-shadow: 0 0 24px rgba(0, 0, 0, .6), inset 0 0 20px rgba(111, 230, 255, .06);
+}
+.constel .slashItem {
+  display: flex; align-items: baseline; gap: 10px;
+  padding: 6px var(--s3); cursor: pointer;
+  font-family: var(--mono); font-size: 11px;
+}
+.constel .slashItem.on { background: rgba(111, 230, 255, .12); }
+.constel .slashName { flex: none; color: var(--cyan); letter-spacing: .06em; }
+.constel .slashHint {
+  flex: 1; min-width: 0; color: var(--dim); font-size: 9.5px; letter-spacing: .08em;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+
+.constel .suggestPop {
+  position: absolute; z-index: 60; right: 0; margin-top: 4px;
+  width: min(400px, 94%);
+  display: flex; flex-direction: column; gap: 8px; padding: var(--s3);
+  background: var(--voidLift); border: 1px solid var(--cyan);
+  box-shadow: 0 0 30px rgba(0, 0, 0, .7), inset 0 0 20px rgba(111, 230, 255, .08);
+}
+.constel .suggestLabel {
+  font-family: var(--mono); font-size: 9.5px; letter-spacing: .12em; color: var(--dim);
+}
+.constel .suggestInput {
+  width: 100%; resize: vertical;
+  font-family: var(--mono); font-size: 12px; line-height: 1.6;
+  color: var(--fg); background: rgba(2, 14, 22, .6);
+  border: 1px solid var(--edgeSoft); outline: none; padding: 8px var(--s3);
+}
+.constel .suggestInput:focus { border-color: var(--cyan); }
+.constel .suggestActs { display: flex; justify-content: flex-end; gap: var(--s2); }
+.constel .suggestActs button {
+  font-family: var(--mono); font-size: 9.5px; letter-spacing: .14em; text-transform: uppercase;
+  padding: 5px 12px; cursor: pointer;
+  background: transparent; border: 1px solid var(--edgeSoft); color: var(--fgSoft);
+}
+.constel .suggestActs .suggestSend {
+  border-color: var(--go); color: var(--go); background: rgba(110, 231, 168, .10);
+}
+
+.constel .suggestions { display: flex; flex-direction: column; gap: 6px; margin-top: var(--s2); }
+.constel .suggestions.empty { display: none; }
+.constel .suggestion {
+  border-left: 2px solid var(--go); padding: 5px 0 5px var(--s3);
+  background: rgba(110, 231, 168, .05);
+}
+.constel .suggestion.pending { opacity: .65; }
+.constel .suggestion.bad { border-left-color: var(--alert); background: rgba(255, 107, 90, .06); }
+.constel .suggestAsk {
+  display: flex; align-items: center; gap: 8px;
+  font-family: var(--mono); font-size: 9px; letter-spacing: .12em;
+  color: var(--go); text-transform: uppercase; margin-bottom: 3px;
+}
+.constel .suggestBody {
+  font-size: 12.5px; line-height: 1.65; color: var(--fgSoft);
+  white-space: pre-wrap; word-break: break-word;
+}
+.constel .suggestDrop {
+  margin-left: auto; border: none; background: transparent; cursor: pointer;
+  color: var(--dim); font-size: 11px; padding: 0 3px; opacity: 0; transition: opacity .12s;
+}
+.constel .suggestion:hover .suggestDrop { opacity: 1; }

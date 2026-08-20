@@ -42,6 +42,8 @@ export const SKIP_SEL = [
   '[data-i18n-skip]',
   '.body', '.bubble', '.thinkBody', '.said', '.docText', '.previewText',        // messages and documents
   '.previewEdit', '.oracleTurn.you', '.oracleAns',
+  '.noteRead', '.toolSay', '.toolList',                                         // notes, and the tool log
+  '.suggestBody', '.suggestAsk', '.slashHint',                                  // suggestions, and the tool menu
   '.diffView', '.dText', '.dLine', '.hunk',                                     // diffs are document text
   '.nodeTitle', '.nodePreview', '.nodeLive', '.nodeStage',                      // graph cards
   /* .threadTitle is deliberately NOT here: the one string it holds that is not

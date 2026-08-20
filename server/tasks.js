@@ -222,7 +222,7 @@ ${joined}`,
  * prefix cache can reuse the (expensive) document prefill across the whole
  * thread. Reordering these messages between turns would defeat that.
  */
-export function buildThreadMessages({ docText, filename, history, question, taskId }) {
+export function buildThreadMessages({ docText, filename, history, question, taskId, workspace = null }) {
   const messages = [{ role: 'system', content: systemFor(taskId) }];
 
   if (docText) {
@@ -259,6 +259,12 @@ Read it. ${taskId === 'rewrite'
     messages.push({ role: m.role, content: m.content });
   }
 
+  // What the tool layer did to the workspace before this turn was answered.
+  // It goes AFTER the document handshake and the history, so the prefix the
+  // cluster caches is unchanged by it — a turn that used tools and a turn that
+  // did not share every token up to this point.
+  if (workspace) messages.push({ role: 'system', content: workspace });
+
   // A task preset just prefixes the user's own words with the preset wording.
   const preset = taskId && taskId !== 'chat' ? TASKS[taskId] : null;
   const content = preset?.instruction ? `${preset.instruction}\n\n${question}`.trim() : question;
@@ -268,7 +274,7 @@ Read it. ${taskId === 'rewrite'
 }
 
 /** Reduce prompt for a threaded question over a document too big for one pass. */
-export function buildThreadReduceMessages({ parts, question, history, filename, taskId }) {
+export function buildThreadReduceMessages({ parts, question, history, filename, taskId, workspace = null }) {
   const recent = history
     .slice(-6)
     .map((m) => `${m.role === 'user' ? 'Q' : 'A'}: ${m.content}`)
@@ -288,6 +294,7 @@ keeping their verbatim quotes. Do not mention the sectioning.
 
 ${parts.map((p, i) => `<section index="${i + 1}">\n${p}\n</section>`).join('\n\n')}`,
     },
+    ...(workspace ? [{ role: 'system', content: workspace }] : []),
   ];
 }
 

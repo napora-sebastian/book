@@ -488,6 +488,44 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--accent); margi
   border-top: 1px solid var(--line); background: var(--bg);
 }
 
+/* --- what the model did to the workspace before it answered ---------------
+
+   Sits above the answer rather than inside it. The answer is prose about what
+   changed; this is the record of what actually ran, and the two are only ever
+   the same when nothing went wrong. Collapsed once the turn is over, because
+   by then the prose is the part worth reading.
+   ------------------------------------------------------------------------- */
+.toolRun {
+  border: 1px solid var(--line); border-radius: var(--radiusSm);
+  background: var(--panel); margin-bottom: var(--s3); overflow: hidden;
+}
+.toolRun > summary {
+  cursor: pointer; padding: 7px 11px; list-style: none;
+  font: 11.5px var(--mono); color: var(--dim);
+  display: flex; align-items: center; gap: 7px;
+}
+.toolRun > summary::-webkit-details-marker { display: none; }
+.toolRun > summary::before { content: "▸"; transition: transform .15s; display: inline-block; }
+.toolRun[open] > summary::before { transform: rotate(90deg); }
+.toolList {
+  border-top: 1px solid var(--line); background: var(--bg);
+  padding: 6px 0; max-height: 240px; overflow: auto;
+}
+.toolCall {
+  display: flex; align-items: baseline; gap: 8px;
+  padding: 3px var(--s3);
+  font: 11.5px/1.6 var(--mono); color: var(--dim);
+  word-break: break-word;
+}
+.toolGlyph { flex: none; width: 1em; text-align: center; }
+.toolName { flex: none; color: var(--fg); opacity: .75; }
+.toolSay { flex: 1; min-width: 0; }
+/* A write changed something the user cannot see from here; a failure changed
+   nothing at all. Both need to survive the collapse of the panel above. */
+.toolCall.write .toolGlyph { color: var(--accent); }
+.toolCall.bad { color: var(--err); }
+.toolCall.bad .toolName { color: var(--err); }
+
 /* ------------------------------------------------------------------ composer */
 
 /* The stage line and the composer share the transcript's column, so the input
@@ -1127,3 +1165,72 @@ tr.dDel .wch { background: var(--diffDelWord); }
 @media (prefers-reduced-motion: reduce) {
   .sidebar { transition: none; }
 }
+
+/* --- the slash menu, and what gets suggested about an answer --------------
+
+   Both are shared behaviour (public/tools-ui.js) with per-surface dress. The
+   module writes these class names and reads nothing back, so everything about
+   how they look is decided here.
+   ------------------------------------------------------------------------- */
+
+.composer { position: relative; }
+.slashMenu {
+  position: absolute; bottom: calc(100% + 6px); left: 0; right: 0; z-index: 40;
+  max-height: 260px; overflow: auto;
+  background: var(--panel); border: 1px solid var(--line); border-radius: var(--radiusSm);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, .18);
+}
+.slashItem {
+  display: flex; align-items: baseline; gap: 10px;
+  padding: 7px 11px; cursor: pointer;
+  font: 12.5px var(--mono);
+}
+.slashItem.on { background: var(--accentSoft, rgba(47, 111, 221, .10)); }
+.slashName { flex: none; color: var(--accent); }
+.slashHint { flex: 1; min-width: 0; font: 11.5px var(--sans, inherit); color: var(--dim);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* The ✦ popup. Anchored inside the message so it scrolls with the answer it
+   is about, rather than floating over a transcript that has moved on. */
+.suggestPop {
+  position: absolute; z-index: 50; right: 0; margin-top: 4px;
+  width: min(420px, 92%);
+  display: flex; flex-direction: column; gap: 8px;
+  padding: var(--s3);
+  background: var(--panel); border: 1px solid var(--line); border-radius: var(--radiusSm);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, .22);
+}
+.suggestLabel { font: 11.5px var(--mono); color: var(--dim); }
+.suggestInput {
+  width: 100%; resize: vertical; font: 13px/1.55 inherit;
+  padding: 8px 10px; border: 1px solid var(--line); border-radius: var(--radiusSm);
+  background: var(--bg); color: var(--fg);
+}
+.suggestInput:focus { outline: none; border-color: var(--accent); }
+.suggestActs { display: flex; justify-content: flex-end; gap: 8px; }
+.suggestActs button {
+  height: var(--ctlSm); padding: 0 12px; font-size: 12.5px; border-radius: var(--radiusSm);
+  border: 1px solid var(--line); background: transparent; color: var(--fg); cursor: pointer;
+}
+.suggestActs .suggestSend { background: var(--accent); border-color: var(--accent); color: #fff; }
+
+/* What came back, filed under the answer. Indented and ruled off, because it
+   is about the answer above it and is not another turn of the conversation. */
+.suggestions { display: flex; flex-direction: column; gap: 8px; margin-top: var(--s2); }
+.suggestions.empty { display: none; }
+.suggestion {
+  border-left: 2px solid var(--accent); padding: 6px 0 6px var(--s3);
+  background: var(--panel); border-radius: 0 var(--radiusSm) var(--radiusSm) 0;
+}
+.suggestion.pending { opacity: .7; }
+.suggestion.bad { border-left-color: var(--err); }
+.suggestAsk {
+  display: flex; align-items: center; gap: 8px;
+  font: 11.5px var(--mono); color: var(--dim); margin-bottom: 3px;
+}
+.suggestBody { font-size: 13.5px; line-height: 1.65; white-space: pre-wrap; word-break: break-word; }
+.suggestDrop {
+  margin-left: auto; border: none; background: transparent; cursor: pointer;
+  color: var(--dim); font-size: 12px; padding: 0 4px; opacity: 0; transition: opacity .12s;
+}
+.suggestion:hover .suggestDrop { opacity: 1; }

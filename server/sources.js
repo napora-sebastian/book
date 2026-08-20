@@ -100,6 +100,41 @@ export function threadPart({ threadId, mode = 'full', label = null }) {
 }
 
 /**
+ * The text a note contributes.
+ *
+ * A note is the one point that owns its content, so there is nothing to fetch
+ * and nothing to truncate — the user (or the model, on the user's instruction)
+ * decided how long it was when they wrote it. `mode` is honoured only to the
+ * extent it can be: a note has no "final answer" to isolate, so `last` reads
+ * the same as `full`, and `none` never reaches here at all.
+ *
+ * A note with no body is a heading — the parent of a split, whose children hold
+ * what it used to say. It contributes its name through the shape of the graph
+ * and no text of its own, so it returns null rather than an empty source.
+ */
+export function notePart({ node, label = null }) {
+  if (!node || node.kind !== 'note') return null;
+  const text = String(node.text ?? '');
+  if (!text.trim()) return null;
+
+  // listGraphNodes joins the provenance filename in; getGraphNode returns the
+  // bare row, so resolve it here rather than making every caller remember which
+  // of the two it happens to be holding.
+  const book = node.src_filename
+    ?? (node.src_document_id ? db.getDocument(node.src_document_id)?.filename : null);
+  const from = book
+    ? `from ${book}${node.src_from != null ? ` @ ${node.src_from}–${node.src_to ?? ''}` : ''}`
+    : null;
+
+  return {
+    kind: 'note',
+    name: label || node.label || `Note ${node.id}`,
+    detail: from,
+    text,
+  };
+}
+
+/**
  * A whole graph as one source.
  *
  * Points in the order they were put down, which on a graph built outward is
@@ -116,7 +151,7 @@ export function graphPart(graphId) {
   const edges = db.listGraphEdges(graphId);
 
   const nameOf = (n) => n.label
-    || (n.kind === 'document' ? n.doc_filename : n.thread_title)
+    || (n.kind === 'document' ? n.doc_filename : n.kind === 'note' ? null : n.thread_title)
     || `Point ${n.id}`;
   const byId = new Map(nodes.map((n) => [n.id, n]));
 
@@ -126,7 +161,9 @@ export function graphPart(graphId) {
   for (const n of nodes) {
     const part = n.kind === 'document'
       ? documentPart({ documentId: n.document_id, version: n.doc_version })
-      : threadPart({ threadId: n.thread_id, label: n.label });
+      : n.kind === 'note'
+        ? notePart({ node: n })
+        : threadPart({ threadId: n.thread_id, label: n.label });
     if (!part?.text?.trim()) continue;
     if (used && used + part.text.length > GRAPH_SOURCE_CHARS) break;
 
@@ -134,7 +171,9 @@ export function graphPart(graphId) {
     used += part.text.length;
     const head = n.kind === 'document'
       ? `book · ${part.name}${part.version != null ? ` v${part.version}` : ''}`
-      : `conversation · ${part.name}${part.detail ? ` (${part.detail})` : ''}`;
+      : n.kind === 'note'
+        ? `note · ${part.name}${part.detail ? ` (${part.detail})` : ''}`
+        : `conversation · ${part.name}${part.detail ? ` (${part.detail})` : ''}`;
     blocks.push(`[point ${taken} · ${head}]\n${part.text}`);
   }
   if (!blocks.length) return null;

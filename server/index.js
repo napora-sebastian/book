@@ -23,6 +23,7 @@ import { threadSource as attachedThreadSource, sourceSummary } from './sources.j
 import { threadTitlePrompt, suggestTitle } from './naming.js';
 import { mountOracle } from './oracle.js';
 import { mountGraph } from './graph.js';
+import { runTools, parseSlash, SLASH_TOOLS, TOOLS } from './tools.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
@@ -170,6 +171,13 @@ app.get('/api/config', asyncRoute(async (_req, res) => {
       instruction: t.instruction,
     })),
     contextBudgetChars: CONTEXT_BUDGET,
+    // The slash menu is built from this rather than from a list copied into
+    // each of the three composers — a tool added in tools.js appears in all of
+    // them, or in none, and never in two of them.
+    slashTools: SLASH_TOOLS.map((id) => ({
+      id,
+      hint: TOOLS[id].describe.split(/[.—]/)[0].trim().slice(0, 90),
+    })),
     stats: db.stats(),
     reachable: false,
     models: [],
@@ -708,6 +716,165 @@ app.post('/api/threads/:id/messages/:messageId/ground-truth', asyncRoute(async (
   res.json(db.saveGroundTruthCheck({ messageId: message.id, diff, model: result.servedModel || chosenModel }));
 }));
 
+/* ------------------------------------------------------------- suggestions
+
+   The ✦ under an answer. The user says what they want suggested — "another
+   category", "a counter-argument", "a shorter way to say it" — and what comes
+   back hangs under that answer rather than becoming the next turn.
+
+   It has its own endpoint rather than going through the tool planner: the tool
+   is what the model reaches for when it decides a suggestion is called for,
+   this is what runs when the user has already decided. Nothing needs planning,
+   so nothing plans, and the answer arrives one call sooner.
+   -------------------------------------------------------------------------- */
+
+app.get('/api/messages/:id/suggestions', (req, res) => {
+  res.json({ suggestions: db.listSuggestions(Number(req.params.id)) });
+});
+
+app.delete('/api/suggestions/:id', (req, res) => {
+  if (!db.deleteSuggestion(Number(req.params.id))) {
+    return res.status(404).json({ error: 'No such suggestion.' });
+  }
+  res.json({ ok: true });
+});
+
+const SUGGEST_SYSTEM = 'You extend an answer that has already been given. The user will name one '
+  + 'thing they want suggested about it. Produce exactly that and nothing else — no preamble, no '
+  + 'restatement of the answer, no offer to do more.\n\n'
+  + 'Match the register and the language of the answer you are extending. If they ask for several '
+  + 'of something, give several, one per line. Keep it short: this is filed under the answer, not '
+  + 'in place of it.';
+
+const suggestPrompt = ({ answer, question, docText, filename, ask }) => [
+  { role: 'system', content: SUGGEST_SYSTEM },
+  {
+    role: 'user',
+    content: [
+      docText ? `<document filename="${filename ?? 'untitled'}">\n${docText}\n</document>` : '',
+      question ? `<the-question>\n${question.slice(0, 4_000)}\n</the-question>` : '',
+      `<the-answer>\n${answer}\n</the-answer>`,
+      `Suggest, about that answer: ${ask}`,
+    ].filter(Boolean).join('\n\n'),
+  },
+];
+
+/**
+ * Suggest something about an answer that was never stored.
+ *
+ * The Oracle's answers live in the page and nowhere else — the archive it reads
+ * is not an archive it writes to. So a suggestion about one cannot be filed
+ * under a message that does not exist, and this returns it without saving,
+ * which is the same promise the answer itself makes.
+ */
+app.post('/api/suggest', asyncRoute(async (req, res) => {
+  const answer = String(req.body?.answer ?? '').trim();
+  const ask = String(req.body?.ask ?? '').trim();
+  if (!answer) return res.status(400).json({ error: 'Nothing to suggest about.' });
+  if (!ask) return res.status(400).json({ error: 'Say what should be suggested.' });
+
+  const chosenModel = req.body?.model || llm.config().model;
+  res.writeHead(200, {
+    'content-type': 'text/event-stream',
+    'cache-control': 'no-cache, no-transform',
+    connection: 'keep-alive',
+    'x-accel-buffering': 'no',
+  });
+  const send = (type, v) => res.write(`data: ${JSON.stringify({ type, v })}\n\n`);
+  const abort = new AbortController();
+  res.on('close', () => abort.abort());
+
+  const messages = suggestPrompt({
+    answer: answer.slice(0, CONTEXT_BUDGET / 2),
+    question: String(req.body?.question ?? ''),
+    ask,
+  });
+  const started = Date.now();
+  let text = '';
+  try {
+    const result = await llm.stream(messages, {
+      model: chosenModel,
+      signal: abort.signal,
+      onToken: (t) => { text += t; send('token', t); },
+    });
+    trace(traceRow({ threadId: null, kind: 'suggest', task: 'suggest', model: chosenModel, result, messages }));
+    if (abort.signal.aborted) return;
+    send('done', { suggestion: null, text: (result.text || text).trim(), ms: Date.now() - started });
+  } catch (err) {
+    if (!abort.signal.aborted) send('error', err.message);
+  } finally {
+    res.end();
+  }
+}));
+
+app.post('/api/messages/:id/suggest', asyncRoute(async (req, res) => {
+  const messageId = Number(req.params.id);
+  const message = db.getMessage(messageId);
+  if (!message) return res.status(404).json({ error: 'No such message.' });
+  if (message.role !== 'assistant') {
+    return res.status(409).json({ error: 'A suggestion attaches to an answer, not to a question.' });
+  }
+
+  const ask = String(req.body?.ask ?? '').trim();
+  if (!ask) return res.status(400).json({ error: 'Say what should be suggested.' });
+
+  const thread = db.getThread(message.thread_id);
+  const chosenModel = req.body?.model || thread?.model || llm.config().model;
+
+  res.writeHead(200, {
+    'content-type': 'text/event-stream',
+    'cache-control': 'no-cache, no-transform',
+    connection: 'keep-alive',
+    'x-accel-buffering': 'no',
+  });
+  const send = (type, v) => res.write(`data: ${JSON.stringify({ type, v })}\n\n`);
+  const abort = new AbortController();
+  res.on('close', () => abort.abort());
+
+  // The answer being extended, the question it answered, and — where there is
+  // one — a slice of the book, so "another category" is another category of
+  // the same material rather than of the model's own prose.
+  const all = db.getMessages(message.thread_id);
+  const asked = [...all].reverse().find((m) => m.id < message.id && m.role === 'user');
+  const doc = thread?.document_id ? db.getDocument(thread.document_id) : null;
+
+  const messages = suggestPrompt({
+    answer: message.content,
+    question: asked?.content,
+    docText: doc?.text ? doc.text.slice(0, CONTEXT_BUDGET / 2) : null,
+    filename: doc?.filename,
+    ask,
+  });
+
+  const started = Date.now();
+  let text = '';
+  try {
+    const result = await llm.stream(messages, {
+      model: chosenModel,
+      signal: abort.signal,
+      onToken: (t) => { text += t; send('token', t); },
+      onFallback: ({ failed, error, next }) =>
+        send('stage', `${failed.label} unavailable (${error}) — ${next.label} is answering`),
+    });
+    trace(traceRow({
+      threadId: message.thread_id, kind: 'suggest', task: 'suggest',
+      model: chosenModel, result, messages,
+    }));
+    if (abort.signal.aborted) return;
+
+    const body = (result.text || text).trim();
+    if (!body) throw new Error('The model returned nothing to suggest.');
+    const saved = db.addSuggestion({
+      messageId, ask, content: body, model: result.model || chosenModel,
+    });
+    send('done', { suggestion: saved, ms: Date.now() - started });
+  } catch (err) {
+    if (!abort.signal.aborted) send('error', err.message);
+  } finally {
+    res.end();
+  }
+}));
+
 app.get('/api/messages/:id/ground-truth', (req, res) => {
   const check = db.getGroundTruthCheck(Number(req.params.id));
   if (!check) return res.status(404).json({ error: 'No ground-truth check yet.' });
@@ -867,8 +1034,15 @@ app.get('/api/documents/:id/versions/:version/rtf', (req, res) => {
  * what makes retrying cheap: a failed turn leaves the question in the thread, so
  * the retry route replays it instead of asking the user to type it again.
  */
-async function streamTurn(res, { threadId, userMsg, history, taskId, chosenModel, version, source = null }) {
-  const question = userMsg.content;
+async function streamTurn(res, {
+  threadId, userMsg, history, taskId, chosenModel, version, source = null, graphId = null,
+}) {
+  // `/toolname the rest of it` — the user naming the tool instead of leaving the
+  // choice to the planner. The command is stripped before the question is used
+  // anywhere else: the answer should read as a reply to what they meant, not to
+  // the syntax they typed it in.
+  const slash = parseSlash(userMsg.content);
+  const question = slash ? (slash.rest || userMsg.content) : userMsg.content;
 
   res.writeHead(200, {
     'content-type': 'text/event-stream',
@@ -917,8 +1091,32 @@ async function streamTurn(res, { threadId, userMsg, history, taskId, chosenModel
   };
 
   try {
+    // Before anything is read or answered, the model gets a chance to look at
+    // the workspace and change it — read a graph, put down a category, draw a
+    // line. Returns null on the ordinary turn, which is every turn that did not
+    // ask for any of that, and then nothing below can tell this ever ran.
+    let tools = null;
+    try {
+      tools = await runTools({
+        question, history, threadId, graphId,
+        forcedTool: slash?.tool ?? null,
+        model: chosenModel,
+        signal: abort.signal,
+        send,
+        trace: ({ kind, model, messages, result, started }) => {
+          traceIds.push(trace(traceRow({ threadId, kind, task: taskId, model, result, messages })));
+          if (result?.usage) send('usage', usagePayload(result));
+        },
+      });
+    } catch (err) {
+      if (abort.signal.aborted) return;
+      send('stage', `workspace tools failed (${err.message}) — answering without them`);
+    }
+    if (abort.signal.aborted) return;
+    const workspace = tools?.text ?? null;
+
     if (docText.length <= CONTEXT_BUDGET) {
-      const messages = buildThreadMessages({ docText, filename, history, question, taskId });
+      const messages = buildThreadMessages({ docText, filename, history, question, taskId, workspace });
       send('stage', docText
         ? `single pass · ~${estimateTokens(docText).toLocaleString()} doc tokens · turn ${history.length / 2 + 1}`
         : 'no document · plain chat');
@@ -961,7 +1159,7 @@ async function streamTurn(res, { threadId, userMsg, history, taskId, chosenModel
         onToken('No section of the document contains anything relevant to that question.');
       } else {
         send('stage', `merging ${parts.length} relevant sections`);
-        const messages = buildThreadReduceMessages({ parts, question, history, filename, taskId });
+        const messages = buildThreadReduceMessages({ parts, question, history, filename, taskId, workspace });
         const result = await llm.stream(messages, {
           model: chosenModel, onToken, onThinking, signal: abort.signal, onFallback,
         });
@@ -987,6 +1185,12 @@ async function streamTurn(res, { threadId, userMsg, history, taskId, chosenModel
       // Empty on the normal path. Non-empty means the main provider was down and
       // something else answered — the UI says so instead of quietly swapping models.
       fallbacks: fallbackNotices,
+      // True when a tool wrote something. The canvas listens for it: a graph
+      // open in another view is now out of date and has to reload itself.
+      touched: Boolean(tools?.canvasTouched),
+      // Anything the model filed under an earlier answer this turn, so the
+      // transcript can hang it there without being re-read.
+      suggestions: tools?.suggestions ?? [],
     });
   } catch (err) {
     const aborted = abort.signal.aborted;
@@ -1043,6 +1247,10 @@ app.post('/api/threads/:id/messages', asyncRoute(async (req, res) => {
   await streamTurn(res, {
     threadId, userMsg, history, taskId, chosenModel, version,
     source: attachedThreadSource(threadId, { version }),
+    // A conversation in the deck may already be a point on a canvas — the same
+    // record seen from the other side. When it is, the tool layer writes to that
+    // canvas by default, so "put this on the graph" means the graph it is on.
+    graphId: db.graphNodeForThread(threadId)?.graph_id ?? null,
   });
 }));
 

@@ -8,6 +8,8 @@
    answer and the archive the same object seen two ways.
    =========================================================================== */
 
+import { attachSlashMenu, askWhatToSuggest, streamSuggestion } from '../tools-ui.js';
+
 const $ = (id) => document.getElementById(id);
 const el = {
   q: $('q'), clearQ: $('clearQ'), ident: $('ident'),
@@ -287,8 +289,28 @@ function turnsHtml(messages, rec, v) {
       <div class="bubble${m.error ? ' errored' : ''}">${highlight(m.content, searchTerms)}</div>
       ${m.error ? `<span class="turnErr">⚠ ${esc(m.error)}</span>` : ''}
       <span class="turnActs">${turnActs(m, rec, last)}</span>
+      ${suggestionsHtml(m, rec)}
       <div class="gtBox hidden" data-gt="${m.id}"></div>
     </article>`)).join('');
+}
+
+/**
+ * What has been suggested about one answer, hung under it.
+ *
+ * A suggestion is about a turn rather than being a turn, so it sits inside the
+ * article it belongs to and never joins the transcript the model is sent.
+ */
+function suggestionsHtml(m, rec) {
+  const rows = (rec?.suggestions ?? []).filter((s) => s.message_id === m.id);
+  return `<div class="suggestions${rows.length ? '' : ' empty'}" data-for="${m.id}">${
+    rows.map((s) => `
+      <div class="suggestion" data-suggestion="${s.id}">
+        <div class="suggestAsk">✦ ${esc(s.ask)}
+          <button class="suggestDrop" data-act="dropSuggestion" data-suggestion="${s.id}"
+                  title="Remove this suggestion">✕</button>
+        </div>
+        <div class="suggestBody" data-i18n-skip>${esc(s.content)}</div>
+      </div>`).join('')}</div>`;
 }
 
 /** A question open for rewriting. Held in the record's view, so travelling away
@@ -390,6 +412,8 @@ function turnActs(m, rec, last) {
     return acts.join('');
   }
 
+  acts.push(`<button class="winAct" data-act="suggestMsg" data-msg="${m.id}"
+      title="Ask the model to suggest something about this answer">✦ SUGGEST</button>`);
   acts.push(`<a class="winAct" href="/api/messages/${m.id}/docx" data-act="dl">⤓ DOCX</a>`);
   if (rec?.document) {
     acts.push(`<button class="winAct" data-act="fileVersion" data-msg="${m.id}">⇪ FILE AS VERSION</button>`);
@@ -510,6 +534,13 @@ async function fitComposer(win, id, rec) {
   // when it differs, or restoring it under the user's own typing would throw
   // the caret to the end of the line.
   const input = foot.querySelector('.composerInput');
+  // Each record window has its own composer, so each gets its own `/` menu —
+  // once, marked on the element, because this footer is repainted on every
+  // focus change and a second menu would answer the same keystrokes twice.
+  if (!input.dataset.slash) {
+    input.dataset.slash = '1';
+    attachSlashMenu(input, () => cfg?.slashTools ?? [], { mount: foot });
+  }
   if (input.value !== v.draft) {
     input.value = v.draft;
     input.style.height = 'auto';
@@ -544,8 +575,8 @@ async function fetchRecord(id) {
   if (!recordCache.has(id)) {
     const body = winEls.get(id)?.querySelector('.winBody');
     if (body) body.innerHTML = '<p class="loadingRec">READING RECORD</p>';
-    const { thread, messages, document: doc } = await api(`/api/oracle/threads/${id}`);
-    recordCache.set(id, { thread, messages, document: doc });
+    const { thread, messages, suggestions, document: doc } = await api(`/api/oracle/threads/${id}`);
+    recordCache.set(id, { thread, messages, suggestions, document: doc });
   }
   return recordCache.get(id);
 }
@@ -1083,6 +1114,8 @@ el.deck.addEventListener('click', (e) => {
 
   const msgId = Number(el2.dataset.msg);
   if (act === 'copyMsg') copyMessage(id, msgId, el2);
+  if (act === 'suggestMsg') suggestOnMessage(id, msgId, el2);
+  if (act === 'dropSuggestion') dropSuggestion(id, Number(el2.dataset.suggestion));
   if (act === 'saveMsg') saveResponse(msgId, el2);
   if (act === 'groundTruth') groundTruth(id, msgId, el2);
   if (act === 'retryMsg') retryTurn(id, msgId);
@@ -1402,6 +1435,10 @@ el.oracleLog.addEventListener('click', (e) => {
 
 el.oraclePins.addEventListener('click', openOraclePins);
 
+// `/` at the start of the box opens the tool list — the same list the deck and
+// the canvas show, served from /api/config so none of the three keeps its own.
+attachSlashMenu(el.oracleInput, () => cfg?.slashTools ?? [], { mount: el.oracleForm });
+
 el.oracleInput.addEventListener('input', () => {
   el.oracleInput.style.height = 'auto';
   el.oracleInput.style.height = `${Math.min(el.oracleInput.scrollHeight, 130)}px`;
@@ -1429,10 +1466,28 @@ el.oracleForm.addEventListener('submit', async (e) => {
   el.oracleInput.style.height = 'auto';
   addTurn('you', `<div class="said">${esc(question)}</div>`);
 
-  const turn = addTurn('answer', '<div class="trail"></div><div class="said"></div><div class="trail sources"></div>');
+  const turn = addTurn('answer',
+    '<div class="trail"></div><div class="said"></div><div class="trail sources"></div>'
+    + '<div class="oracleActs hidden"><button type="button" class="turnAct oracleSuggest"'
+    + ' title="Ask the model to suggest something about this answer">✦ SUGGEST</button></div>'
+    + '<div class="suggestions empty"></div>');
   const trail = turn.querySelector('.trail');
   const said = turn.querySelector('.said');
   const sources = turn.querySelector('.sources');
+
+  // The Oracle's answers are not stored, so a suggestion about one is not
+  // stored either — it lives beside the answer for as long as the answer does.
+  // The button appears only once there is an answer to extend.
+  const sugBox = turn.querySelector('.suggestions');
+  const sugBtn = turn.querySelector('.oracleSuggest');
+  sugBtn.addEventListener('click', async () => {
+    const ask = await askWhatToSuggest(sugBtn);
+    if (!ask) return;
+    sugBtn.disabled = true;
+    await streamSuggestion(sugBox, { answer, question }, ask);
+    sugBtn.disabled = false;
+    el.oracleLog.scrollTop = el.oracleLog.scrollHeight;
+  });
 
   const chip = (cls, text) => {
     const c = document.createElement('span');
@@ -1506,6 +1561,12 @@ el.oracleForm.addEventListener('submit', async (e) => {
           chip('', `⌕ ${v.query} · ${v.hits.length} REC`);
         } else if (type === 'opened') {
           chip('', `▤ REC ${pad(v.threadId)}`);
+        } else if (type === 'tool') {
+          // The archivist can rearrange as well as find. A read is a chip like
+          // any other step; a write is a chip AND a toast, because it changed
+          // something that is not on this screen.
+          chip(v.ok ? (v.write ? 'wrote' : '') : 'bad', `${v.write ? '✎' : '👁'} ${v.summary}`);
+          if (v.write || !v.ok) toast(v.summary, v.ok ? 'ok' : 'err');
         } else if (type === 'navigate') {
           applyNavigation(v);
           chip('', `▶ ${navLabel(v)}`);
@@ -1524,6 +1585,10 @@ el.oracleForm.addEventListener('submit', async (e) => {
           oracleHistory.push({ role: 'assistant', content: v.text || answer });
           const tok = v.usage?.total_tokens ? ` · ${v.usage.total_tokens.toLocaleString()} tok` : '';
           stage(`answered in ${(v.ms / 1000).toFixed(1)}s${tok} · ${v.searched.length} queries`);
+          // A graph elsewhere in the app is now out of date. The deck does not
+          // draw graphs, so all it can do is say so.
+          if (v.touched) toast('The graphs changed — open the constellation to see it', 'info');
+          if (answer.trim()) turn.querySelector('.oracleActs').classList.remove('hidden');
         } else if (type === 'error') {
           throw new Error(v);
         }
@@ -2507,6 +2572,48 @@ async function groundTruth(id, msgId, btn) {
   } finally {
     btn.disabled = false;
   }
+}
+
+/**
+ * The ✦ on a stored answer in a record window.
+ *
+ * The suggestion streams into the block already under that answer, and the
+ * record is re-read afterwards so what is on screen is what was actually
+ * filed — a window is redrawn from `recordCache` on every focus change, and a
+ * block that existed only in the DOM would vanish the first time it was.
+ */
+async function suggestOnMessage(id, msgId, btn) {
+  const ask = await askWhatToSuggest(btn);
+  if (!ask) return;
+
+  const box = winEls.get(id)?.querySelector(`.suggestions[data-for="${msgId}"]`);
+  if (!box) return;
+
+  btn.disabled = true;
+  try {
+    await streamSuggestion(box, { messageId: msgId }, ask);
+    // Re-read rather than patch, the same as every other write here: the block
+    // above exists only in the DOM, and a window is rebuilt from `recordCache`
+    // the first time the deck moves.
+    recordCache.delete(id);
+    await openFront(id);
+  } catch (err) {
+    toast(err.message, 'err');
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+async function dropSuggestion(id, suggestionId) {
+  try {
+    await api(`/api/suggestions/${suggestionId}`, { method: 'DELETE' });
+  } catch (err) {
+    return void toast(err.message, 'err');
+  }
+  const rec = recordCache.get(id);
+  if (rec) rec.suggestions = (rec.suggestions ?? []).filter((s) => s.id !== suggestionId);
+  winEls.get(id)?.querySelector(`.suggestion[data-suggestion="${suggestionId}"]`)?.remove();
+  toast('Suggestion removed');
 }
 
 function groundTruthHtml(check) {
