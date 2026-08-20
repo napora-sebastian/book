@@ -67,6 +67,9 @@ export const tagHtml = (kind, as = null) =>
 
 /* --------------------------------------------------------------- one row */
 
+/** Counts row instances, so each one owns the drawer that hangs under it. */
+let rowSeq = 0;
+
 /**
  * `on` maps "kind:id" → the saved row, so a source already attached comes back
  * ticked, in the position it was saved in, with the mode it was saved with.
@@ -76,14 +79,21 @@ function rowHtml({
   cur = null, why = null, depth = 0, tag = null,
 }) {
   const ticked = Boolean(cur);
+  const key = `${kind}:${id}`;
+  // The drawer belongs to the ROW, not to the source. One source legitimately
+  // stands in two places in the same list — a conversation under CONVERSATIONS
+  // and that very conversation as a point on a graph further down — and while
+  // the drawers were keyed "kind:id" the second copy opened the first copy's:
+  // the row you clicked stayed empty and its contents landed off-screen.
+  const uid = `sr${++rowSeq}`;
   return `
-    <div class="srcRow${ticked ? ' on' : ''}${why ? ' picked' : ''}" data-key="${kind}:${id}" data-depth="${depth}">
+    <div class="srcRow${ticked ? ' on' : ''}${why ? ' picked' : ''}" data-key="${key}" data-uid="${uid}" data-depth="${depth}">
       <label class="srcMain">
         <input type="checkbox" class="srcBox" data-kind="${kind}" data-id="${id}"${ticked ? ' checked' : ''} />
         ${expandable
           // A button, not part of the label: inside one, a click would tick the
           // row as well as open it, and opening is not choosing.
-          ? `<button type="button" class="srcTwisty" data-expand="${kind}:${id}"
+          ? `<button type="button" class="srcTwisty" data-expand="${uid}" data-kind="${kind}" data-id="${id}"
                      title="Show what this holds" aria-expanded="false">▸</button>`
           : '<span class="srcTwisty spacer"></span>'}
         <span class="srcGlyph">${glyph}</span>
@@ -97,13 +107,13 @@ function rowHtml({
         </span>
       </label>
       ${mode
-        ? `<select class="srcMode" data-key="${kind}:${id}" title="How much of it is read">
+        ? `<select class="srcMode" data-key="${key}" title="How much of it is read">
              <option value="full"${cur?.mode === 'last' ? '' : ' selected'}>WHOLE</option>
              <option value="last"${cur?.mode === 'last' ? ' selected' : ''}>LAST ANSWER</option>
            </select>`
         : ''}
     </div>
-    <div class="srcKids hidden" data-kids="${kind}:${id}"></div>`;
+    <div class="srcKids hidden" data-kids="${uid}"></div>`;
 }
 
 /* ------------------------------------------------------------- the list */
@@ -262,15 +272,37 @@ export function wireSourceList(root, {
   const picks = new Map();
   const loaded = new Set();
 
+  const rowOf   = (uid) => root.querySelector(`.srcRow[data-uid="${uid}"]`);
+  const kidsOf  = (uid) => root.querySelector(`[data-kids="${uid}"]`);
+  const modeOf  = (row) => row?.querySelector('.srcMode') ?? null;
+  const copiesOf = (kind, id) => [...root.querySelectorAll(`.srcBox[data-kind="${kind}"][data-id="${id}"]`)];
+
+  /* Rows that arrive late start from what the list already says: a graph opened
+     after one of its conversations was ticked upstairs shows it ticked, rather
+     than offering it again as though it were something else. */
+  const adopt = (scope) => {
+    scope.querySelectorAll('.srcBox').forEach((b) => {
+      // A copy that is itself covered says nothing about what the user wants —
+      // it was forced off by its own parent — so only a free copy is followed.
+      const twin = copiesOf(b.dataset.kind, b.dataset.id)
+        .find((o) => o !== b && !o.disabled && !scope.contains(o));
+      if (!twin) return;
+      b.checked = twin.checked;
+      b.closest('.srcRow').classList.toggle('on', b.checked);
+      const from = modeOf(twin.closest('.srcRow'));
+      const to = modeOf(b.closest('.srcRow'));
+      if (from && to) to.value = from.value;
+    });
+  };
+
   /* A parent and its own children are the same text twice. Ticking the parent
      turns the children off and holds them off; untick it and they are yours
      again. Without this the obvious gesture — tick the graph, then tick the one
      note you care about — quietly pays for that note twice. */
-  const syncKids = (key) => {
-    const box = root.querySelector(`.srcBox[data-kind="${key.split(':')[0]}"][data-id="${key.split(':')[1]}"]`);
-    const kids = root.querySelector(`[data-kids="${key}"]`);
+  const syncKids = (uid) => {
+    const kids = kidsOf(uid);
     if (!kids) return;
-    const parentOn = Boolean(box?.checked);
+    const parentOn = Boolean(rowOf(uid)?.querySelector('.srcBox')?.checked);
     kids.classList.toggle('covered', parentOn);
     kids.querySelectorAll('.srcBox').forEach((b) => {
       b.disabled = parentOn;
@@ -279,26 +311,52 @@ export function wireSourceList(root, {
         b.closest('.srcRow').classList.remove('on');
       }
     });
+    // Uncovered again, a child goes back to whatever the list says about that
+    // source elsewhere — otherwise unticking the graph leaves the note inside
+    // it reading as untouched while its own row upstairs is still ticked.
+    if (!parentOn) adopt(kids);
   };
 
-  const expand = async (key, twisty) => {
-    const [kind, id] = key.split(':');
-    const kids = root.querySelector(`[data-kids="${key}"]`);
+  const syncAll = () => root.querySelectorAll('.srcRow[data-uid]').forEach((r) => syncKids(r.dataset.uid));
+
+  /* Two rows for one source are still one source. A conversation ticked in the
+     list has to show as ticked where it stands on a graph as well, or the list
+     says a thing is both attached and not, and the count says two. */
+  const mirror = (kind, id, { checked = null, mode = null } = {}) => {
+    for (const b of copiesOf(kind, id)) {
+      const row = b.closest('.srcRow');
+      if (checked != null && !b.disabled) {
+        b.checked = checked;
+        row.classList.toggle('on', checked);
+      }
+      if (mode != null) {
+        const sel = modeOf(row);
+        if (sel) sel.value = mode;
+      }
+    }
+    syncAll();
+  };
+
+  const expand = async (twisty) => {
+    const uid = twisty.dataset.expand;
+    const { kind, id } = twisty.dataset;
+    const kids = kidsOf(uid);
     if (!kids) return;
 
     const open = kids.classList.contains('hidden');
     kids.classList.toggle('hidden', !open);
     twisty.textContent = open ? '▾' : '▸';
     twisty.setAttribute('aria-expanded', String(open));
-    if (!open || loaded.has(key)) return;
+    if (!open || loaded.has(uid)) return;
 
     kids.innerHTML = '<p class="srcNone">READING…</p>';
     try {
       const data = await api(CHILD[kind].url(Number(id)));
       kids.innerHTML = CHILD[kind].rows(data, on, picks) || '<p class="srcNone">NOTHING IN IT.</p>';
-      loaded.add(key);
+      loaded.add(uid);
       wireRows(kids);
-      syncKids(key);
+      adopt(kids);
+      syncAll();
     } catch (err) {
       kids.innerHTML = `<p class="srcNone">${esc(err.message)}</p>`;
     }
@@ -311,15 +369,14 @@ export function wireSourceList(root, {
       t.addEventListener('click', (ev) => {
         ev.preventDefault();
         ev.stopPropagation();
-        expand(t.dataset.expand, t);
+        expand(t);
       });
     });
     scope.querySelectorAll('.srcBox').forEach((b) => {
       if (b.dataset.wired) return;
       b.dataset.wired = '1';
       b.addEventListener('change', () => {
-        b.closest('.srcRow').classList.toggle('on', b.checked);
-        syncKids(keyOf(b.dataset.kind, b.dataset.id));
+        mirror(b.dataset.kind, b.dataset.id, { checked: b.checked });
         onChange();
       });
     });
@@ -328,11 +385,16 @@ export function wireSourceList(root, {
       if (s.dataset.wired) return;
       s.dataset.wired = '1';
       s.addEventListener('click', (ev) => ev.preventDefault());
+      s.addEventListener('change', () => {
+        const box = s.closest('.srcRow')?.querySelector('.srcBox');
+        if (box) mirror(box.dataset.kind, box.dataset.id, { mode: s.value });
+        onChange();
+      });
     });
   }
 
   wireRows(root);
-  root.querySelectorAll('.srcBox:checked').forEach((b) => syncKids(keyOf(b.dataset.kind, b.dataset.id)));
+  syncAll();
 
   /* ------------------------------------------------------------ the find */
 
@@ -360,22 +422,23 @@ export function wireSourceList(root, {
       // made the choice for them.
       let hit = 0;
       for (const p of out.picks ?? []) {
-        const box = root.querySelector(`.srcBox[data-kind="${p.kind}"][data-id="${p.id}"]`);
-        if (!box || box.disabled) continue;
+        // Every row standing for that source, not just the first one found:
+        // a conversation is picked once but may be shown in two places.
+        const boxes = copiesOf(p.kind, p.id).filter((b) => !b.disabled);
+        if (!boxes.length) continue;
         hit += 1;
-        box.checked = true;
-        const row = box.closest('.srcRow');
-        row.classList.add('on', 'picked');
-        if (!row.querySelector('.srcWhy')) {
-          const w = document.createElement('span');
-          w.className = 'srcWhy';
-          w.dataset.i18nSkip = '';
-          w.textContent = `✦ ${picks.get(keyOf(p.kind, p.id))}`;
-          row.querySelector('.srcText').appendChild(w);
+        for (const box of boxes) {
+          const row = box.closest('.srcRow');
+          row.classList.add('picked');
+          if (!row.querySelector('.srcWhy')) {
+            const w = document.createElement('span');
+            w.className = 'srcWhy';
+            w.dataset.i18nSkip = '';
+            w.textContent = `✦ ${picks.get(keyOf(p.kind, p.id))}`;
+            row.querySelector('.srcText').appendChild(w);
+          }
         }
-        const sel = root.querySelector(`.srcMode[data-key="${keyOf(p.kind, p.id)}"]`);
-        if (sel) sel.value = p.mode ?? 'full';
-        syncKids(keyOf(p.kind, p.id));
+        mirror(p.kind, p.id, { checked: true, mode: p.mode ?? 'full' });
       }
       root.querySelector('.srcRow.picked')?.scrollIntoView({ block: 'center', behavior: 'smooth' });
       say.textContent = hit
@@ -395,15 +458,23 @@ export function wireSourceList(root, {
     if (ev.key === 'Enter') { ev.preventDefault(); find(); }
   });
 
-  return {
-    /** What to save, in the order the list shows it. */
-    ticked: () => [...root.querySelectorAll('.srcBox')]
-      .filter((b) => b.checked && !b.disabled)
-      .map((b) => ({
+  /** What to save, in the order the list shows it — a source at most once. */
+  const chosen = () => {
+    const out = [];
+    const seen = new Set();
+    for (const b of root.querySelectorAll('.srcBox')) {
+      if (!b.checked || b.disabled) continue;
+      const key = keyOf(b.dataset.kind, b.dataset.id);
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.push({
         kind: b.dataset.kind,
         id: Number(b.dataset.id),
-        mode: root.querySelector(`.srcMode[data-key="${keyOf(b.dataset.kind, b.dataset.id)}"]`)?.value ?? 'full',
-      })),
-    count: () => root.querySelectorAll('.srcBox:checked:not(:disabled)').length,
+        mode: modeOf(b.closest('.srcRow'))?.value ?? 'full',
+      });
+    }
+    return out;
   };
+
+  return { ticked: chosen, count: () => chosen().length };
 }
